@@ -1,0 +1,15 @@
+name: "GAM RSF Workshop TWS-WS"
+output_dir: '.'
+navbar:
+  title: NRES 746
+  left:
+  - text: Home
+    href: index.html
+  # title: "GAM Workshop"
+  # left:
+  #   - text: "GAMs Intro"
+  #     href: gams_kts.html
+output:
+  html_document:
+    lib_dir: site_libs
+    self_contained: no

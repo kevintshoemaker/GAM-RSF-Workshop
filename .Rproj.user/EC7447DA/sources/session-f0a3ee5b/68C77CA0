@@ -1,25 +1,25 @@
 {
     "id": "68C77CA0",
-    "path": "~/GitHub/GAM-RSF-Workshop/00_Simulate_RSF_Data.R",
-    "project_path": "00_Simulate_RSF_Data.R",
+    "path": "~/GitHub/GAM-RSF-Workshop/01_Simulate_Telemetry_Data.R",
+    "project_path": "01_Simulate_Telemetry_Data.R",
     "type": "r_source",
     "hash": "0",
     "contents": "",
     "dirty": false,
     "created": 1767379980380.0,
     "source_on_save": false,
-    "relative_order": 1,
+    "relative_order": 3,
     "properties": {
         "tempName": "Untitled1",
         "source_window_id": "",
         "Source": "Source"
     },
     "folds": "",
-    "lastKnownWriteTime": 1767379999,
+    "lastKnownWriteTime": 1767382595,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1767379999619,
+    "last_content_update": 1767382595068,
     "read_only": false,
     "read_only_alternatives": []
 }

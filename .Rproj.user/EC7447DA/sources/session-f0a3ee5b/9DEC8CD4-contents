@@ -1,0 +1,378 @@
+# Mojave National Preserve - Integrated Environmental Data Extraction
+# Combines topographic (elevation, slope, aspect, etc.) and vegetation (RAP) data
+
+# Clear workspace
+rm(list = ls())
+gc()
+
+# Load required packages ----
+library(terra)        # For raster operations
+library(sf)           # For spatial vector operations
+library(elevatr)      # For downloading elevation data
+library(rapr)         # For RAP vegetation data
+library(tidyverse)    # For data manipulation
+library(leaflet)      # For interactive mapping
+
+cat("========================================\n")
+cat("INTEGRATED ENVIRONMENTAL DATA EXTRACTION\n")
+cat("Mojave National Preserve\n")
+cat("========================================\n\n")
+
+# Set coordinate reference systems ----
+crs_proj <- 32611     # NAD 1983 / UTM Zone 11N
+crs_geog <- 4269      # NAD 1983 (Geographic)
+crs_wgs84 <- 4326     # WGS84
+
+# Define study area parameters ----
+area_size_km2 <- 50
+side_length_m <- sqrt(area_size_km2 * 1000000)
+center_lat <- 34.996
+center_lon <- -115.5232
+
+cat("Study area: ", area_size_km2, "km²\n")
+cat("Center: ", center_lat, "°N, ", center_lon, "°W\n\n")
+
+# Create study area ----
+center_point <- st_point(c(center_lon, center_lat)) %>%
+  st_sfc(crs = crs_wgs84) %>%
+  st_sf(id = 1, geometry = .)
+
+center_point_proj <- st_transform(center_point, crs_proj)
+center_coords <- st_coordinates(center_point_proj)
+
+half_side <- side_length_m / 2
+xmin <- center_coords[1] - half_side
+xmax <- center_coords[1] + half_side
+ymin <- center_coords[2] - half_side
+ymax <- center_coords[2] + half_side
+
+study_area_proj <- st_polygon(list(
+  matrix(c(xmin, ymin, xmax, ymin, xmax, ymax, xmin, ymax, xmin, ymin), 
+         ncol = 2, byrow = TRUE)
+)) %>%
+  st_sfc(crs = crs_proj) %>%
+  st_sf(id = 1, geometry = .)
+
+study_area_wgs84 <- st_transform(study_area_proj, crs_wgs84)
+
+# ========================================
+# PART 1: TOPOGRAPHIC DATA
+# ========================================
+
+cat("\n========================================\n")
+cat("DOWNLOADING TOPOGRAPHIC DATA\n")
+cat("========================================\n\n")
+
+# Download elevation
+cat("Downloading elevation data...\n")
+elevation <- get_elev_raster(study_area_wgs84, z = 12, src = "aws")
+elev_terra <- rast(elevation)
+elev_utm <- project(elev_terra, paste0("EPSG:", crs_proj), method = "bilinear")
+elev_utm <- crop(elev_utm, vect(study_area_proj))
+elev_utm <- mask(elev_utm, vect(study_area_proj))
+names(elev_utm) <- "elevation"
+
+cat("Elevation range: ", round(minmax(elev_utm)[1]), "-", 
+    round(minmax(elev_utm)[2]), "m\n\n")
+
+# Calculate topographic derivatives
+cat("Calculating topographic variables...\n")
+slope <- terrain(elev_utm, v = "slope", unit = "degrees")
+names(slope) <- "slope"
+
+aspect <- terrain(elev_utm, v = "aspect", unit = "degrees")
+names(aspect) <- "aspect"
+
+aspect_rad <- aspect * pi / 180
+aspect_cos <- cos(aspect_rad)
+aspect_sin <- sin(aspect_rad)
+names(aspect_cos) <- "aspect_cos"
+names(aspect_sin) <- "aspect_sin"
+
+tri <- terrain(elev_utm, v = "TRI")
+names(tri) <- "roughness"
+
+tpi <- terrain(elev_utm, v = "TPI")
+names(tpi) <- "tpi"
+
+topo_stack <- c(elev_utm, slope, aspect, aspect_cos, aspect_sin, tri, tpi)
+
+cat("Topographic layers created: ", nlyr(topo_stack), "\n\n")
+
+# ========================================
+# PART 2: VEGETATION DATA
+# ========================================
+
+cat("========================================\n")
+cat("DOWNLOADING VEGETATION DATA (RAP)\n")
+cat("========================================\n\n")
+
+# Set years
+years_to_download <- 2018:2024
+cat("Years:", paste(years_to_download, collapse = ", "), "\n\n")
+
+# Download RAP data
+bbox <- st_bbox(study_area_wgs84)
+
+afg_list <- list()
+pfg_list <- list()
+shrub_list <- list()
+tree_list <- list()
+
+for(year in years_to_download) {
+  cat("Year", year, "...\n")
+  
+  tryCatch({
+    afg_rast <- rap_get_layer(bbox = bbox, year = year, layer = "afgAGB")
+    afg_list[[as.character(year)]] <- rast(afg_rast)
+    
+    pfg_rast <- rap_get_layer(bbox = bbox, year = year, layer = "pfgAGB")
+    pfg_list[[as.character(year)]] <- rast(pfg_rast)
+    
+    shrub_rast <- rap_get_layer(bbox = bbox, year = year, layer = "shrub")
+    shrub_list[[as.character(year)]] <- rast(shrub_rast)
+    
+    tree_rast <- rap_get_layer(bbox = bbox, year = year, layer = "tree")
+    tree_list[[as.character(year)]] <- rast(tree_rast)
+    
+  }, error = function(e) {
+    cat("  Error:", e$message, "\n")
+  })
+  
+  Sys.sleep(1)
+}
+
+cat("\nProcessing vegetation data...\n")
+
+# Reproject and crop
+for(year in names(afg_list)) {
+  afg_list[[year]] <- project(afg_list[[year]], paste0("EPSG:", crs_proj))
+  afg_list[[year]] <- crop(afg_list[[year]], vect(study_area_proj))
+  afg_list[[year]] <- mask(afg_list[[year]], vect(study_area_proj))
+  
+  pfg_list[[year]] <- project(pfg_list[[year]], paste0("EPSG:", crs_proj))
+  pfg_list[[year]] <- crop(pfg_list[[year]], vect(study_area_proj))
+  pfg_list[[year]] <- mask(pfg_list[[year]], vect(study_area_proj))
+  
+  shrub_list[[year]] <- project(shrub_list[[year]], paste0("EPSG:", crs_proj))
+  shrub_list[[year]] <- crop(shrub_list[[year]], vect(study_area_proj))
+  shrub_list[[year]] <- mask(shrub_list[[year]], vect(study_area_proj))
+  
+  tree_list[[year]] <- project(tree_list[[year]], paste0("EPSG:", crs_proj))
+  tree_list[[year]] <- crop(tree_list[[year]], vect(study_area_proj))
+  tree_list[[year]] <- mask(tree_list[[year]], vect(study_area_proj))
+}
+
+# Calculate herbaceous and means
+herbaceous_list <- lapply(names(afg_list), function(y) {
+  afg_list[[y]] + pfg_list[[y]]
+})
+names(herbaceous_list) <- names(afg_list)
+
+afg_mean <- mean(rast(afg_list), na.rm = TRUE)
+pfg_mean <- mean(rast(pfg_list), na.rm = TRUE)
+shrub_mean <- mean(rast(shrub_list), na.rm = TRUE)
+tree_mean <- mean(rast(tree_list), na.rm = TRUE)
+herbaceous_mean <- mean(rast(herbaceous_list), na.rm = TRUE)
+
+names(afg_mean) <- "annual_forb_grass"
+names(pfg_mean) <- "perennial_forb_grass"
+names(shrub_mean) <- "shrub_cover"
+names(tree_mean) <- "tree_cover"
+names(herbaceous_mean) <- "herbaceous_cover"
+
+veg_stack <- c(herbaceous_mean, shrub_mean, tree_mean, afg_mean, pfg_mean)
+
+cat("Vegetation layers created: ", nlyr(veg_stack), "\n\n")
+
+# ========================================
+# PART 3: COMBINE AND RESAMPLE
+# ========================================
+
+cat("========================================\n")
+cat("COMBINING DATASETS\n")
+cat("========================================\n\n")
+
+# Resample vegetation to match topographic resolution
+cat("Resampling vegetation data to match topography...\n")
+veg_stack_resampled <- resample(veg_stack, topo_stack, method = "bilinear")
+
+# Create master environmental stack
+env_stack <- c(topo_stack, veg_stack_resampled)
+
+cat("Total layers in integrated stack: ", nlyr(env_stack), "\n")
+cat("Layer names:\n")
+cat(paste("  ", names(env_stack), "\n"))
+cat("\n")
+
+# ========================================
+# PART 4: SUMMARY STATISTICS
+# ========================================
+
+cat("========================================\n")
+cat("SUMMARY STATISTICS\n")
+cat("========================================\n\n")
+
+# Create comprehensive summary
+summary_df <- data.frame(
+  layer = names(env_stack),
+  type = c(rep("Topographic", nlyr(topo_stack)), rep("Vegetation", nlyr(veg_stack))),
+  min = sapply(1:nlyr(env_stack), function(i) {
+    global(env_stack[[i]], "min", na.rm = TRUE)[1,1]
+  }),
+  max = sapply(1:nlyr(env_stack), function(i) {
+    global(env_stack[[i]], "max", na.rm = TRUE)[1,1]
+  }),
+  mean = sapply(1:nlyr(env_stack), function(i) {
+    global(env_stack[[i]], "mean", na.rm = TRUE)[1,1]
+  }),
+  sd = sapply(1:nlyr(env_stack), function(i) {
+    global(env_stack[[i]], "sd", na.rm = TRUE)[1,1]
+  })
+)
+
+cat("TOPOGRAPHIC VARIABLES:\n")
+topo_summary <- summary_df[summary_df$type == "Topographic", ]
+for(i in 1:nrow(topo_summary)) {
+  cat(sprintf("  %-15s: mean=%7.2f  sd=%7.2f  [%7.2f, %7.2f]\n",
+              topo_summary$layer[i], topo_summary$mean[i], 
+              topo_summary$sd[i], topo_summary$min[i], topo_summary$max[i]))
+}
+
+cat("\nVEGETATION VARIABLES:\n")
+veg_summary <- summary_df[summary_df$type == "Vegetation", ]
+for(i in 1:nrow(veg_summary)) {
+  cat(sprintf("  %-20s: mean=%6.2f%%  sd=%6.2f%%  [%6.2f%%, %6.2f%%]\n",
+              veg_summary$layer[i], veg_summary$mean[i], 
+              veg_summary$sd[i], veg_summary$min[i], veg_summary$max[i]))
+}
+cat("\n")
+
+# ========================================
+# PART 5: VISUALIZATIONS
+# ========================================
+
+cat("Creating visualizations...\n")
+
+# Multi-panel plot
+png("mojave_integrated_overview.png", width = 14, height = 10, units = "in", res = 300)
+par(mfrow = c(3, 4), mar = c(2, 2, 2, 2))
+
+plot(elev_utm, main = "Elevation (m)", col = terrain.colors(100))
+plot(slope, main = "Slope (°)", col = heat.colors(100))
+plot(aspect, main = "Aspect (°)", col = rainbow(100))
+plot(tri, main = "Roughness", col = heat.colors(100))
+
+plot(herbaceous_mean, main = "Herbaceous Cover (%)", 
+     col = colorRampPalette(c("white", "yellow", "green"))(100))
+plot(shrub_mean, main = "Shrub Cover (%)", 
+     col = colorRampPalette(c("white", "orange", "brown"))(100))
+plot(tree_mean, main = "Tree Cover (%)", 
+     col = colorRampPalette(c("white", "lightgreen", "darkgreen"))(100))
+plot(afg_mean, main = "Annual Forb & Grass (%)", 
+     col = colorRampPalette(c("white", "yellow"))(100))
+
+# Add study boundary to last few panels
+plot(elev_utm, main = "Study Area", col = terrain.colors(100))
+plot(vect(study_area_proj), add = TRUE, border = "red", lwd = 3)
+
+plot(herbaceous_mean, main = "Herbaceous (with boundary)", 
+     col = colorRampPalette(c("white", "yellow", "green"))(100))
+plot(vect(study_area_proj), add = TRUE, border = "red", lwd = 2)
+
+dev.off()
+
+# Create correlation plot
+cat("Creating correlation matrix...\n")
+library(corrplot)
+
+# Extract values for correlation
+env_values <- as.data.frame(env_stack)
+env_values <- na.omit(env_values)
+
+# Calculate correlation (sample if too large)
+if(nrow(env_values) > 5000) {
+  env_values <- env_values[sample(1:nrow(env_values), 5000), ]
+}
+
+cor_matrix <- cor(env_values)
+
+png("mojave_correlation_matrix.png", width = 10, height = 10, units = "in", res = 300)
+corrplot(cor_matrix, 
+         method = "color",
+         type = "upper",
+         order = "hclust",
+         addCoef.col = "black",
+         tl.col = "black",
+         tl.srt = 45,
+         diag = FALSE,
+         number.cex = 0.7,
+         tl.cex = 0.8)
+dev.off()
+
+# ========================================
+# PART 6: SAVE OUTPUTS
+# ========================================
+
+cat("\nSaving outputs...\n")
+
+output_dir <- "mojave_integrated_data"
+if(!dir.exists(output_dir)) {
+  dir.create(output_dir)
+}
+
+# Save integrated stack
+writeRaster(env_stack, 
+            file.path(output_dir, "environmental_stack.tif"), 
+            overwrite = TRUE)
+
+# Save individual components
+writeRaster(topo_stack, 
+            file.path(output_dir, "topographic_stack.tif"), 
+            overwrite = TRUE)
+writeRaster(veg_stack_resampled, 
+            file.path(output_dir, "vegetation_stack.tif"), 
+            overwrite = TRUE)
+
+# Save study area
+st_write(study_area_proj, 
+         file.path(output_dir, "study_area.shp"), 
+         delete_dsn = TRUE)
+
+# Save summary
+write.csv(summary_df, 
+          file.path(output_dir, "environmental_summary.csv"), 
+          row.names = FALSE)
+
+# Save correlation matrix
+write.csv(cor_matrix, 
+          file.path(output_dir, "correlation_matrix.csv"))
+
+cat("\n========================================\n")
+cat("ANALYSIS COMPLETE!\n")
+cat("========================================\n")
+cat("Study area: ", area_size_km2, "km²\n")
+cat("Center: ", center_lat, "°N, ", center_lon, "°W\n")
+cat("Total layers: ", nlyr(env_stack), "\n")
+cat("  - Topographic: ", nlyr(topo_stack), "\n")
+cat("  - Vegetation: ", nlyr(veg_stack), "\n")
+cat("\nKey statistics:\n")
+cat("  Elevation: ", round(global(elev_utm, "mean", na.rm=TRUE)[1,1]), "m (mean)\n")
+cat("  Herbaceous: ", round(global(herbaceous_mean, "mean", na.rm=TRUE)[1,1], 1), "% (mean)\n")
+cat("  Shrub: ", round(global(shrub_mean, "mean", na.rm=TRUE)[1,1], 1), "% (mean)\n")
+cat("  Tree: ", round(global(tree_mean, "mean", na.rm=TRUE)[1,1], 1), "% (mean)\n")
+cat("\nOutput directory: ", output_dir, "\n")
+cat("Visualizations saved:\n")
+cat("  - mojave_integrated_overview.png\n")
+cat("  - mojave_correlation_matrix.png\n")
+cat("========================================\n")
+
+# Return combined results
+list(
+  study_area = study_area_proj,
+  environmental_stack = env_stack,
+  topographic_stack = topo_stack,
+  vegetation_stack = veg_stack_resampled,
+  summary = summary_df,
+  correlation = cor_matrix
+)

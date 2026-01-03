@@ -1,0 +1,406 @@
+# Generate Additional Synthetic Raster Layers
+# Creates 3 new layers with:
+# 1. Varying correlation to existing environmental variables
+# 2. Positive real values
+# 3. Varying spatial autocorrelation
+
+# Clear workspace ----
+rm(list = ls())
+gc()
+
+# Load packages ----
+library(terra)
+library(sf)
+library(tidyverse)
+library(gstat)      # For spatial interpolation/kriging
+# library(RandomFields) # For generating spatial random fields
+# If RandomFields doesn't work, we'll use alternative methods
+
+cat("========================================\n")
+cat("GENERATING ADDITIONAL RASTER LAYERS\n")
+cat("========================================\n\n")
+
+# Load existing data ----
+cat("Loading existing environmental data...\n")
+
+data_dir <- "mojave_topographic_data"
+
+# Load the covariate stack
+env_stack <- rast(file.path(data_dir, "covariate_stack.tif"))
+study_area <- st_read(file.path(data_dir, "study_area.shp"), quiet = TRUE)
+
+cat("Existing layers:\n")
+print(names(env_stack))
+cat("\n")
+
+# Extract resolution and extent info
+template <- env_stack[[1]]
+res_x <- res(template)[1]
+res_y <- res(template)[2]
+n_cells <- ncell(template)
+
+cat("Raster properties:\n")
+cat("  Resolution:", round(res_x), "x", round(res_y), "m\n")
+cat("  Dimensions:", nrow(template), "rows x", ncol(template), "cols\n")
+cat("  Total cells:", n_cells, "\n\n")
+
+
+# ========================================
+# LAYER 1: HIGH CORRELATION, LOW SPATIAL AUTOCORRELATION
+# ========================================
+cat("Creating Layer 1: Resource Index (high correlation, low autocorrelation)...\n")
+
+# Create a weighted combination of existing variables
+# This represents a hypothetical "resource availability" index
+
+# Normalize key variables to 0-1 scale
+normalize <- function(x) {
+  x_min <- global(x, "min", na.rm = TRUE)[1,1]
+  x_max <- global(x, "max", na.rm = TRUE)[1,1]
+  (x - x_min) / (x_max - x_min)
+}
+
+elev_norm <- normalize(env_stack$elevation)
+slope_norm <- normalize(env_stack$slope)
+shrub_norm <- normalize(env_stack$SHRUB)
+pfg_norm <- normalize(env_stack$PFG)
+
+# Create composite index with ecological reasoning
+# Higher at mid-elevations, moderate slopes, good vegetation
+resource_index <- (
+  0.3 * (1 - abs(elev_norm - 0.5) * 2) +  # Prefer mid-elevations
+  0.2 * (1-abs(slope_norm - 0.7) * 2) +                 # Prefer steeper slopes
+  0.25 * shrub_norm +                      # More shrubs = more resources
+  0.25 * pfg_norm                          # More perennial grass = more resources
+)
+
+plot(resource_index)
+
+# Add  uncorrelated noise (low spatial autocorrelation)
+set.seed(123)
+noise_vals <- rnorm(n_cells, mean = 0, sd = 0.1)
+noise_raster <- setValues(template, noise_vals)
+
+# Combine signal and noise
+layer1 <- resource_index + noise_raster
+
+# Transform to ensure positive values (scale 10-100 range)
+layer1 <- exp(layer1 * 1.5 + 2)  # Exponential ensures positive, creates realistic range
+
+names(layer1) <- "resource_index"
+
+cat("  Range:", round(global(layer1, "min", na.rm=TRUE)[1,1], 2), "to", 
+    round(global(layer1, "max", na.rm=TRUE)[1,1], 2), "\n")
+cat("  Mean:", round(global(layer1, "mean", na.rm=TRUE)[1,1], 2), "\n\n")
+
+plot(layer1)
+
+# ========================================
+# LAYER 2: MODERATE CORRELATION, MODERATE SPATIAL AUTOCORRELATION
+# ========================================
+cat("Creating Layer 2: Habitat Quality (moderate correlation, moderate autocorrelation)...\n")
+
+# Start with a moderate correlation to existing variables
+rough_norm <- normalize(env_stack$roughness)
+tree_norm <- normalize(env_stack$TREE)
+
+# Base pattern (moderate correlation)
+habitat_base <- 0.4 * rough_norm + 0.3 * tree_norm + 0.3 * shrub_norm
+
+# Create spatially autocorrelated noise using distance-based smoothing
+# Get cell coordinates
+coords_df <- as.data.frame(template, xy = TRUE, cells = TRUE)
+coords_df <- coords_df[!is.na(coords_df[,4]), ]  # Remove NAs
+
+# Generate random values
+set.seed(456)
+coords_df$random_val <- rnorm(nrow(coords_df), mean = 0, sd = 1)
+
+# Create a raster from random values
+random_rast <- rast(template)
+random_rast[coords_df$cell] <- coords_df$random_val
+
+# Apply focal smoothing to create moderate spatial autocorrelation
+# Window size of ~500m (about 15-20 cells depending on resolution)
+window_size <- ceiling(500 / res_x)
+if(window_size %% 2 == 0) window_size <- window_size + 1  # Make it odd
+
+smooth_noise <- focal(random_rast, w = window_size, fun = mean, na.rm = TRUE)
+
+# Combine base pattern with spatially autocorrelated noise
+layer2 <- habitat_base + 0.5 * smooth_noise
+
+# Transform to positive values (scale 5-50 range)
+layer2 <- exp(layer2 * 1.2 + 1.5)
+
+names(layer2) <- "habitat_quality"
+
+cat("  Range:", round(global(layer2, "min", na.rm=TRUE)[1,1], 2), "to", 
+    round(global(layer2, "max", na.rm=TRUE)[1,1], 2), "\n")
+cat("  Mean:", round(global(layer2, "mean", na.rm=TRUE)[1,1], 2), "\n\n")
+
+plot(layer2)
+
+# ========================================
+# LAYER 3: LOW CORRELATION, HIGH SPATIAL AUTOCORRELATION
+# ========================================
+cat("Creating Layer 3: Disturbance Intensity (low correlation, high autocorrelation)...\n")
+
+# Very weak correlation with existing variables
+afg_norm <- normalize(env_stack$AFG)
+
+# Weak base pattern
+disturbance_base <- 0.2 * afg_norm
+
+# Create highly autocorrelated spatial pattern
+# Use distance-based interpolation of random points
+
+# Sample random points across the study area
+set.seed(789)
+n_points <- 5  # Fewer points = more autocorrelation
+
+ncell(template)
+template2 <- terra::aggregate(template,6)
+ncell(template2)
+coords_df2 <- as.data.frame(template2, xy = TRUE, cells = TRUE)
+coords_df2 <- coords_df2[!is.na(coords_df2[,4]), ]  # Remove NAs
+
+# Get a sample of coordinates
+sample_cells <- sample(coords_df2$cell, n_points)
+sample_coords <- coords_df2[coords_df$cell %in% sample_cells, c("x", "y")]
+sample_coords$value <- rnorm(n_points, mean = 0, sd = .4)
+
+# Convert to spatial points
+sample_sf <- st_as_sf(sample_coords, coords = c("x", "y"), crs = st_crs(study_area))
+
+# Create a fine grid for interpolation
+
+grid_points <- as.data.frame(template2, xy = TRUE, cells = TRUE)
+grid_points <- grid_points[!is.na(grid_points[,4]), c("x", "y", "cell")]
+grid_sf <- st_as_sf(grid_points, coords = c("x", "y"), crs = st_crs(study_area))
+
+# Inverse distance weighting (creates smooth, highly autocorrelated surface)
+# Calculate distances from each grid point to each sample point
+cat("  Calculating inverse distance interpolation...\n")
+
+# Use a simple IDW approach
+idw_values <- numeric(nrow(grid_sf))
+
+## note: this takes a very long time- try decreasing resolution
+i=1
+for(i in 1:nrow(grid_sf)) {
+  # Calculate distances to all sample points
+  dists <- st_distance(grid_sf[i,], sample_sf)
+  dists <- as.numeric(dists)
+  
+  # Avoid division by zero
+  dists[dists < 1] <- 1
+  
+  # Inverse distance weighting (power = 2 for smooth interpolation)
+  weights <- 1 / (dists^2)
+  weights <- weights / sum(weights)
+  
+  # Weighted average of sample values
+  idw_values[i] <- sum(sample_coords$value * weights)
+  
+  # Progress indicator
+  if(i %% 1000 == 0) cat("    ", i, "of", nrow(grid_sf), "cells\n")
+}
+
+# Create raster from interpolated values
+interpolated_rast <- rast(template2)
+interpolated_rast[grid_points$cell] <- idw_values
+
+plot(interpolated_rast)
+
+interpolated_rast = terra::resample(interpolated_rast, template, method = "bilinear")
+
+# Combine weak base with strong spatial pattern
+layer3 <- disturbance_base + 1.5 * interpolated_rast
+
+# Transform to positive values (scale 1-30 range)
+layer3 <- exp(layer3 * 0.8 + 1)
+
+names(layer3) <- "disturbance_intensity"
+
+cat("  Range:", round(global(layer3, "min", na.rm=TRUE)[1,1], 2), "to", 
+    round(global(layer3, "max", na.rm=TRUE)[1,1], 2), "\n")
+cat("  Mean:", round(global(layer3, "mean", na.rm=TRUE)[1,1], 2), "\n\n")
+
+plot(layer3)
+
+# ========================================
+# COMBINE AND ANALYZE
+# ========================================
+
+# Create a stack of new layers
+new_layers <- c(layer1, layer2, layer3)
+
+cat("Summary of new layers:\n\n")
+for(i in 1:nlyr(new_layers)) {
+  layer_name <- names(new_layers)[i]
+  layer_stats <- global(new_layers[[i]], c("min", "max", "mean", "sd"), na.rm = TRUE)
+  cat(sprintf("%-22s: min=%7.2f  max=%7.2f  mean=%7.2f  sd=%6.2f\n",
+              layer_name,
+              layer_stats$min,
+              layer_stats$max,
+              layer_stats$mean,
+              layer_stats$sd))
+}
+cat("\n")
+
+# Calculate correlations with existing layers
+cat("Correlation with existing environmental variables:\n\n")
+
+# Sample points to calculate correlation (use all non-NA cells)
+sample_df <- as.data.frame(c(env_stack, new_layers), na.rm = TRUE)
+
+# Calculate correlations for each new layer
+for(new_layer_name in names(new_layers)) {
+  cat(new_layer_name, ":\n")
+  
+  # Select a few key existing variables
+  key_vars <- c("elevation", "slope", "SHRUB", "TREE", "AFG", "PFG")
+  
+  for(var in key_vars) {
+    if(var %in% names(sample_df)) {
+      cor_val <- cor(sample_df[[var]], sample_df[[new_layer_name]], 
+                     use = "complete.obs")
+      cat(sprintf("  vs %-12s: r = %6.3f\n", var, cor_val))
+    }
+  }
+  cat("\n")
+}
+
+# Calculate spatial autocorrelation (Moran's I)
+cat("Spatial autocorrelation (Moran's I):\n\n")
+
+library(spdep)
+
+# Create neighbors (using queen contiguency)
+# Sample a subset for computational efficiency
+set.seed(999)
+sample_size <- min(5000, nrow(coords_df))
+sample_idx <- sample(1:nrow(coords_df), sample_size)
+
+sample_coords_matrix <- as.matrix(coords_df[sample_idx, c("x", "y")])
+
+# Use k-nearest neighbors (k=8 for queen-like adjacency)
+nb <- knn2nb(knearneigh(sample_coords_matrix, k = 8))
+listw <- nb2listw(nb, style = "W")
+
+for(layer_name in names(new_layers)) {
+  layer_vals <- new_layers[[layer_name]][coords_df$cell[sample_idx]]
+  layer_vals <- as.vector(layer_vals)
+  
+  # Remove any NAs
+  valid_idx <- !is.na(layer_vals)
+  if(sum(valid_idx) > 100) {
+    moran_result <- moran.test(layer_vals[valid_idx], 
+                               nb2listw(nb[valid_idx], style = "W"),
+                               na.action = na.omit)
+    cat(sprintf("%-22s: I = %6.3f (p < %0.3f)\n", 
+                layer_name, 
+                moran_result$estimate[1],
+                moran_result$p.value))
+  }
+}
+cat("\n")
+
+# ========================================
+# SAVE OUTPUTS
+# ========================================
+cat("Saving new layers...\n\n")
+
+# Save individual layers
+writeRaster(layer1, 
+            file.path(data_dir, "resource_index.tif"), 
+            overwrite = TRUE)
+writeRaster(layer2, 
+            file.path(data_dir, "habitat_quality.tif"), 
+            overwrite = TRUE)
+writeRaster(layer3, 
+            file.path(data_dir, "disturbance_intensity.tif"), 
+            overwrite = TRUE)
+
+# Save as multi-layer stack
+writeRaster(new_layers, 
+            file.path(data_dir, "additional_layers.tif"), 
+            overwrite = TRUE)
+
+# Create combined stack with all variables
+full_stack <- c(env_stack, new_layers)
+writeRaster(full_stack, 
+            file.path(data_dir, "full_covariate_stack.tif"), 
+            overwrite = TRUE)
+
+cat("Saved to", data_dir, "\n")
+cat("  - resource_index.tif\n")
+cat("  - habitat_quality.tif\n")
+cat("  - disturbance_intensity.tif\n")
+cat("  - additional_layers.tif (3-layer stack)\n")
+cat("  - full_covariate_stack.tif (all", nlyr(full_stack), "layers)\n\n")
+
+# Create visualization
+cat("Creating visualization...\n")
+
+# png(file.path(data_dir, "additional_layers_plot.png"), 
+#     width = 12, height = 4, units = "in", res = 300)
+
+par(mfrow = c(1, 3), mar = c(2, 2, 3, 2))
+
+plot(layer1, main = "Resource Index\n(High correlation, Low autocorrelation)", 
+     col = hcl.colors(100, "YlOrRd", rev = TRUE))
+
+plot(layer2, main = "Habitat Quality\n(Moderate correlation, Moderate autocorrelation)", 
+     col = hcl.colors(100, "Greens", rev = TRUE))
+
+plot(layer3, main = "Disturbance Intensity\n(Low correlation, High autocorrelation)", 
+     col = hcl.colors(100, "Blues", rev = TRUE))
+
+# dev.off()
+
+par(mfrow = c(1, 1))
+
+cat("Visualization saved to:", 
+    file.path(data_dir, "additional_layers_plot.png"), "\n\n")
+
+# Create summary table
+summary_df <- data.frame(
+  layer = names(new_layers),
+  min = sapply(1:nlyr(new_layers), function(i) {
+    global(new_layers[[i]], "min", na.rm = TRUE)[1,1]
+  }),
+  max = sapply(1:nlyr(new_layers), function(i) {
+    global(new_layers[[i]], "max", na.rm = TRUE)[1,1]
+  }),
+  mean = sapply(1:nlyr(new_layers), function(i) {
+    global(new_layers[[i]], "mean", na.rm = TRUE)[1,1]
+  }),
+  sd = sapply(1:nlyr(new_layers), function(i) {
+    global(new_layers[[i]], "sd", na.rm = TRUE)[1,1]
+  }),
+  correlation_strength = c("High", "Moderate", "Low"),
+  spatial_autocorrelation = c("Low", "Moderate", "High")
+)
+
+write.csv(summary_df, 
+          file.path(data_dir, "additional_layers_summary.csv"), 
+          row.names = FALSE)
+
+cat("Summary statistics saved to:", 
+    file.path(data_dir, "additional_layers_summary.csv"), "\n")
+
+# ========================================
+cat("\n========================================\n")
+cat("GENERATION COMPLETE\n")
+cat("========================================\n")
+cat("Created 3 new raster layers:\n")
+cat("1. Resource Index - High correlation with environment, low spatial autocorrelation\n")
+cat("2. Habitat Quality - Moderate correlation, moderate spatial autocorrelation\n")
+cat("3. Disturbance Intensity - Low correlation, high spatial autocorrelation\n")
+cat("\nAll layers contain positive real values\n")
+cat("Output directory:", data_dir, "\n")
+cat("========================================\n")
+
+# END SCRIPT

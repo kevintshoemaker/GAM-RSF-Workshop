@@ -1,0 +1,6 @@
+"0","## Load Data"
+"0","tmpf <- tempfile()"
+"0","curl_download(""https://www.metoffice.gov.uk/hadobs/hadcrut4/data/current/time_series/HadCRUT.4.6.0.0.annual_nh.txt"", tmpf)"
+"0","gtemp <- read.table(tmpf, colClasses = rep(""numeric"", 12))[, 1:2] # only want some of the variables"
+"0","names(gtemp) <- c(""Year"", ""Temperature"")"
+"0","gtemp <- as_tibble(gtemp)"

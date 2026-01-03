@@ -1,0 +1,6 @@
+"0","ggplot(basis,"
+"0","       aes(x = x, y = value, colour = bf)) +"
+"0","    geom_line(lwd = 2, alpha = 0.5) +"
+"0","    guides(colour = FALSE) +"
+"0","    labs(x = 'x', y = 'b(x)') +"
+"0","    theme_minimal(base_size = 20, base_family = 'firasans')"

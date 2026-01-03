@@ -1,0 +1,3 @@
+"0","m_nlme <- lme(travel ~ 1, data = Rail, ~ 1 | Rail, method = ""REML"") "
+"0",""
+"0","m_gam  <- gam(travel ~ s(Rail, bs = ""re""), data = Rail, method = ""REML"")"

@@ -1,0 +1,197 @@
+---
+title: "Welcome to TWS GAMs Workshop"
+author: "Non-linear habitat models using telemetry data"
+date: "Feb 2026"
+output:
+  html_document:
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+---
+
+## Course Information
+      
+### Instructor Info 
+Kevin Shoemaker			  
+University of Nevada, Reno        
+Email: [kevinshoemaker@unr.edu](kevinshoemaker@unr.edu)			
+
+
+### Course Objectives
+
+
+```{r echo=FALSE, eval=FALSE}
+# rmarkdown::render('index.Rmd', 'word_document')
+# rmarkdown::render('schedule.Rmd', 'word_document')
+
+# knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+# rmarkdown::render('index.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('schedule.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('INTRO.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE1.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE2.Rmd',rmarkdown::pdf_document())  # latex_engine="xelatex"
+# rmarkdown::render('LECTURE3.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE4.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE5.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE6.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE7.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE8.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE9.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LECTURE10.Rmd',rmarkdown::pdf_document())
+# 
+# 
+# 
+# rmarkdown::render("neuralNet.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("SEM.RMarkdown.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("Occupancy.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("TimeSeries_all.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("SCR.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("sppm.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("SEM.RMarkdown.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("spatial_autocorrelation.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("MEM2.Rmd",rmarkdown::pdf_document())
+# rmarkdown::render("MANOVA.Rmd",rmarkdown::pdf_document())
+
+
+# rmarkdown::render('LAB1.Rmd',rmarkdown::pdf_document())   # deprecated
+# rmarkdown::render('LAB2.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LAB3.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LAB4.Rmd',rmarkdown::pdf_document())
+# rmarkdown::render('LAB5.Rmd',rmarkdown::pdf_document())
+
+# rmarkdown::render('FINALPROJ.Rmd',rmarkdown::pdf_document())
+
+
+
+```
+
+```{r echo=FALSE}
+rmd2rscript <- function(infile="LECTURE2.Rmd"){    # function for converting markdown to scripts
+  outfile <- gsub(".Rmd",".R",infile)
+  close( file( outfile, open="w" ) )   # clear output file
+  con1 <- file(infile,open="r")
+  con2 <- file(outfile,"w")
+  stringToFind <- "```{r*"
+  stringToFind2 <- "echo"
+  isrblock <- FALSE
+  #count=0
+  blocknum=0
+  
+  while(length(input <- readLines(con1, n=1)) > 0){   # while there are still lines to be read
+    isrblock <- grepl(input, pattern = stringToFind, perl = TRUE)   # is it the start of an R block?
+    showit <- !grepl(input, pattern = stringToFind2, perl = TRUE)   # is it hidden (echo=FALSE)
+    if(isrblock){
+      blocknum=blocknum+1
+      while(!grepl(newline<-readLines(con1, n=1),pattern="```",perl=TRUE)){
+        if((blocknum>1)&((showit)|(blocknum==2))) write(newline,file=con2,append=TRUE)
+        #count=count+1
+      }
+      isrblock=FALSE
+    }
+  }
+  closeAllConnections()
+}
+
+
+rmd2rscript_labanswers <- function(infile="LECTURE2.Rmd"){    # function for converting markdown to scripts
+  outfile <- gsub(".Rmd","_key.R",infile)
+  close( file( outfile, open="w" ) )   # clear output file
+  con1 <- file(infile,open="r")
+  con2 <- file(outfile,"w")
+  stringToFind <- "```{r*"
+  stringToFind2 <- c("answer","test","solution")
+  isrblock <- FALSE
+  #count=0
+  blocknum=0
+
+  while(length(input <- readLines(con1, n=1)) > 0){   # while there are still lines to be read
+    isrblock <- grepl(input, pattern = stringToFind, perl = TRUE)   # is it the start of an R block?
+    showit <- grepl(input, pattern = stringToFind2[1], perl = TRUE) | grepl(input, pattern = stringToFind2[2]) | grepl(input, pattern = stringToFind2[3])
+    if(isrblock){
+      blocknum=blocknum+1
+      while(!grepl(newline<-readLines(con1, n=1),pattern="```",perl=TRUE)){
+        if((blocknum>1)&((showit)|(blocknum==2))) write(newline,file=con2,append=TRUE)
+        #count=count+1
+      }
+      isrblock=FALSE
+    }
+  }
+  closeAllConnections()
+}
+
+#getwd()
+
+
+
+
+```
+
+
+```{r echo=FALSE, eval=FALSE}
+
+rmd2rscript("LECTURE1.Rmd")
+rmd2rscript("LECTURE2.Rmd")
+rmd2rscript("LECTURE3.Rmd")
+rmd2rscript("LECTURE4.Rmd")
+rmd2rscript("LECTURE5.Rmd")
+rmd2rscript("LECTURE6.Rmd")
+rmd2rscript("LECTURE7.Rmd")  ##
+rmd2rscript("LECTURE8.Rmd")
+rmd2rscript("LECTURE9.Rmd")
+rmd2rscript("LECTURE10.Rmd")
+rmd2rscript("FigureDemo.Rmd")
+rmd2rscript("LAB3demo.Rmd")
+
+rmd2rscript("LAB5.Rmd")
+
+rmd2rscript("SDM_v5.Rmd")
+rmd2rscript("TimeSeries_all.Rmd")
+rmd2rscript("SCR.Rmd")
+rmd2rscript("SEM.Rmd")
+rmd2rscript("spatial_autocorrelation.Rmd")
+rmd2rscript("BayesianNetworks.Rmd")
+rmd2rscript("MEM2.Rmd")
+rmd2rscript("QuantileRegression.Rmd")
+rmd2rscript("ordination_lecture.Rmd")
+rmd2rscript("sppm.Rmd")
+rmd2rscript("MANOVA.Rmd")
+
+rmd2rscript("Mixed_Effects_Demo.Rmd")
+rmd2rscript("GLMM_Code_Demo_2025.Rmd")
+rmd2rscript("GAM_Code_Demo_2025.Rmd")
+rmd2rscript("GaussianProcessLabDemo.Rmd")
+rmd2rscript("INLA_demo.Rmd")
+
+rmd2rscript("GLMM_Lab.Rmd")
+rmd2rscript("GAMs_Lab.Rmd")
+rmd2rscript("RSF_Lab.Rmd")
+rmd2rscript("Rastering.Rmd")
+rmd2rscript("rf2023.Rmd")
+rmd2rscript("rfregression.Rmd")
+rmd2rscript("SpatialRegression.Rmd")
+rmd2rscript("IPM_lecture.Rmd")
+
+rmd2rscript_labanswers(infile="LAB1.Rmd")
+rmd2rscript_labanswers("LAB2.Rmd")
+rmd2rscript_labanswers("LAB3.Rmd")
+rmd2rscript_labanswers("LAB4.Rmd")
+
+```
+
+
+
+```{r echo=FALSE, eval=FALSE}
+
+# to embed html
+<!--html_preserve-->
+<div>
+    <div>
+       <h1>Courses &amp; Teaching</h1>
+    </div>
+</div>
+<!--/html_preserve-->
+```
+
+
+
+

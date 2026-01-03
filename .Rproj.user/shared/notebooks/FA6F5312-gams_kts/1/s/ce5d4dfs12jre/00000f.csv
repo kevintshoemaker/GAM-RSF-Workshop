@@ -1,0 +1,6 @@
+"0","data_plt <- ggplot(data, aes(x = x, y = ycent)) +"
+"0","    geom_line(col = 'goldenrod', lwd = 2) +"
+"0","    geom_point(aes(y = yobs), alpha = 0.2, size = 3) +"
+"0","    labs(x = 'x', y = 'f(x)') +"
+"0","    theme_minimal(base_size = 20, base_family = 'firasans')"
+"0","data_plt"

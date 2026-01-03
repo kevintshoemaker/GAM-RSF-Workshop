@@ -1,0 +1,27 @@
+{
+    "id": "C018FDB9",
+    "path": "~/GitHub/GAM-RSF-Workshop/01_Generate_Unseen_Layers.R",
+    "project_path": "01_Generate_Unseen_Layers.R",
+    "type": "r_source",
+    "hash": "841998634",
+    "contents": "",
+    "dirty": false,
+    "created": 1767389559586.0,
+    "source_on_save": false,
+    "relative_order": 6,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "405,0",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1767393003,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1767393003685,
+    "read_only": false,
+    "read_only_alternatives": []
+}
