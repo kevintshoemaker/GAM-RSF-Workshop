@@ -5,7 +5,7 @@ date: "January 3, 2026"
 output:
   xaringan::moon_reader:
     css: ['default', 'https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css', 'slides.css']
-    lib_dir: libs
+   lib_dir: libs
     nature:
       titleSlideClass: ['inverse','middle','left',my-title-slide]
       highlightStyle: github

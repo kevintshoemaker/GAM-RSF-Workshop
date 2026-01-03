@@ -1,5 +1,5 @@
 ---
-title: "Generalized Additive Models with R and mgcv"
+title: "Intro to Generalized Additive Models with R and mgcv"
 author: "Kevin Shoemaker (modified from Gavin Simpson)"
 date: "January 3, 2026"
 output:
