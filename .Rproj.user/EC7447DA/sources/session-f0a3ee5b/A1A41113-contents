@@ -22,6 +22,14 @@ Email: [kevinshoemaker@unr.edu](kevinshoemaker@unr.edu)
 [https://bit.ly/GAM-Intro]
 
 
+## Code examples, GAM intro
+
+[Arthropod example](code/arthropod.R)
+[Arthropod data](data/seibold-et-al/25786_3_data.csv)
+
+[Joshua tree example](code/joshua-tree.R)
+[Joshua tree data](data/godsoe-et-al/joshua-tree.txt)
+
 ### Course Objectives
 
 

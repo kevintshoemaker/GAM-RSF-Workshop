@@ -3,7 +3,7 @@
     "path": "~/GitHub/GAM-RSF-Workshop/00_Prepare_Spatial.R",
     "project_path": "00_Prepare_Spatial.R",
     "type": "r_source",
-    "hash": "3682239587",
+    "hash": "0",
     "contents": "",
     "dirty": false,
     "created": 1767382603539.0,
@@ -13,8 +13,8 @@
         "tempName": "Untitled1",
         "source_window_id": "",
         "Source": "Source",
-        "cursorPosition": "223,81",
-        "scrollLine": "0"
+        "cursorPosition": "95,0",
+        "scrollLine": "85"
     },
     "folds": "",
     "lastKnownWriteTime": 1767388037,

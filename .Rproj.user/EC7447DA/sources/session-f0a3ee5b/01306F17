@@ -1,0 +1,26 @@
+{
+    "id": "01306F17",
+    "path": "~/GitHub/GAM-RSF-Workshop/code/joshua-tree.R",
+    "project_path": "code/joshua-tree.R",
+    "type": "r_source",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1767489077063.0,
+    "source_on_save": false,
+    "relative_order": 8,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "34,3",
+        "scrollLine": "25"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1767491708,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1767491708522,
+    "read_only": false,
+    "read_only_alternatives": []
+}

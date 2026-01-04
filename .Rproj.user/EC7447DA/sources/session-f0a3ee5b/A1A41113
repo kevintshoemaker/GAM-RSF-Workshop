@@ -3,7 +3,7 @@
     "path": "~/GitHub/GAM-RSF-Workshop/index.Rmd",
     "project_path": "index.Rmd",
     "type": "r_markdown",
-    "hash": "2584912902",
+    "hash": "0",
     "contents": "",
     "dirty": false,
     "created": 1767481386797.0,
@@ -13,15 +13,15 @@
         "tempName": "Untitled1",
         "source_window_id": "",
         "Source": "Source",
-        "cursorPosition": "21,26",
-        "scrollLine": "10"
+        "cursorPosition": "32,21",
+        "scrollLine": "19"
     },
     "folds": "",
-    "lastKnownWriteTime": 1767483007,
+    "lastKnownWriteTime": 1767489058,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1767483007989,
+    "last_content_update": 1767489058237,
     "read_only": false,
     "read_only_alternatives": []
 }
