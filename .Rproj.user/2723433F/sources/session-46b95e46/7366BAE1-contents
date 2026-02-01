@@ -39,7 +39,7 @@ See email for link -- download materials as ZIPfile and unzip to the RStudio Pro
 
 ### Splines intro (tent spline)
 
-[Tent splines demo](splines_demo.R)
+[Tent splines demo](code/splines_demo.R)
 
 ### Time series example 
 
