@@ -28,18 +28,18 @@ Download course materials by clicking on the green "Code" button and downloading
 
 ## Course Materials (Google Drive)
 
-Same instructions as above- download materials as ZIPfile and unzip to the RStudio Project Directory.
+See email for link -- download materials as ZIPfile and unzip to the RStudio Project Directory.
 
 ## Intro to GAM slides (Gavin Simpson)
 
-* HTML Slide deck [bit.ly/gam-efi-22]() &copy; Simpson (2022) [![Creative Commons Licence](https://i.creativecommons.org/l/by/4.0/88x31.png)](http://creativecommons.org/licenses/by/4.0/)
+[Intro to GAM slides](https://fromthebottomoftheheap.net/slides/gams-webinar-efi-esa-2022/gams.html#1)
 
 
 ## GAM worked examples
 
 ### Splines intro (tent spline)
 
-[Tent splines demo](splines_demo.R)
+[Tent splines demo](code/splines_demo.R)
 
 ### Time series example 
 
