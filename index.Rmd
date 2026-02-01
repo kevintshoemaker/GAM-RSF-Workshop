@@ -32,7 +32,7 @@ See email for link -- download materials as ZIPfile and unzip to the RStudio Pro
 
 ## Intro to GAM slides (Gavin Simpson)
 
-* HTML Slide deck [bit.ly/gam-efi-22]() &copy; Simpson (2022) [![Creative Commons Licence](https://i.creativecommons.org/l/by/4.0/88x31.png)](http://creativecommons.org/licenses/by/4.0/)
+[Intro to GAM slides](https://fromthebottomoftheheap.net/slides/gams-webinar-efi-esa-2022/gams.html#37)
 
 
 ## GAM worked examples
