@@ -1,0 +1,917 @@
+
+# RSF Analysis (synthetic data from known model)
+
+# clear workspace ------------
+
+rm(list = ls())
+gc()
+
+# install packages----------------------------------
+
+library(Matrix)
+# library(adehabitatHR)
+library(terra)
+library(DHARMa)
+library(sf)
+library(mgcv)
+# library(INLA)
+library(gratia)
+# library(parallel)
+# library(VSURF)   #new RFE package
+library(amt)
+# library(ctmm)
+# library(mgcViz)
+library(stringr)
+library(ranger)
+library(tidyverse)
+
+# set global vars--------------------------
+
+## Set coordinate reference systems ----
+crs_proj <- 32611     # NAD 1983 / UTM Zone 11N (Mojave is in Zone 11)
+crs_geog <- 4269      # NAD 1983 (Geographic, degrees)
+crs_wgs84 <- 4326     # WGS84 for leaflet and elevatr
+
+resolution <- c(500, 500)   # for now: 0.5 km square pixels 
+
+allyears <- 2015:2024 
+
+timevar_covars_list <- c("AFG","PFG","SHRUB","TREE")
+
+
+# Load data  -------------
+
+data_dir <- "mojave_spatialdata_forsim"
+study_area <- st_read(file.path(data_dir, "study_area.shp"), quiet = TRUE)
+study_area_extent <- ext(vect(study_area))
+
+cov_layers <- rast(file.path(data_dir, "covariate_stack.tif"))
+
+covars_list <- names(cov_layers)
+
+## rasterize study area  -------
+
+temp = rast(study_area_extent, resolution = resolution, crs=crs(vect(study_area)) )
+template_rast <- rasterize(vect(study_area), temp, field = "id")
+
+# plot(template_rast)
+
+ncell(template_rast)    # 3,969 cells
+
+## Read in GPS collar data ------------------
+
+pts_dir = "telemetry_data"
+simpoints <- st_read(file.path(pts_dir, "telemetry_data.gpkg"))
+simpoints <- st_transform(simpoints, crs_proj)
+
+plot(st_geometry(simpoints))
+names(simpoints)[names(simpoints) == "animal_id"] <- "ID"
+
+plot(st_geometry(simpoints),col="darkgreen",add=T,pch=20,cex=.2)
+
+## convert to data frame--------------------------------
+
+xy = st_coordinates(simpoints)   # extract UTMs
+proj = st_crs(simpoints)   # extract CRS
+
+dat <- st_drop_geometry(simpoints)   # ~200k points
+
+length(which(!complete.cases(dat)))  # 0 rows with one or more NA
+dat <- na.omit(dat)
+
+
+# process data -----------
+
+
+## make home ranges ----------
+
+## Nest by individual ID
+
+all_ids = sort(unique(dat$ID))
+dat$ID = factor(dat$ID,levels=all_ids)  # make ID factor
+
+trk_grouped <- dat %>%
+  nest(data = -ID) %>%  # group by individual ID and winteryear
+  mutate(track = map(data, ~ make_track(.x, x, y, timestamp, crs = crs_proj)))
+
+## Calculate home ranges for each individual --------------------------------------------
+
+hr <- trk_grouped %>%
+  mutate(hr = map(track, ~ hr_kde(.x, levels = 0.9, h=c(1000,1000), keep.data=T )))  
+
+i=10
+hr$ID[i]
+# terra::plot(hr_north$hr[[i]]$ud)
+plot(hr$hr[[i]])
+class(hr$hr[[i]])
+r1 = random_points(hr$hr[[i]], n = 500, presence = hr$hr[[i]]$data)
+# table(r1$case_)
+# a=hr_north$hr[[i]]$data;View(a)
+plot(r1)
+
+#  Convert to sf for plotting
+
+# subset(dat,ID==hr_north$ID[164])
+
+hr_sf <- hr %>%
+  mutate(hr_poly = map(hr, hr_isopleths)) %>%
+  dplyr::select(ID, hr_poly) %>%
+  unnest(cols = hr_poly) %>%
+  st_as_sf()  # ensure itâ€™s a proper sf object
+
+# # Add a buffer (2000 meters)    
+hr_sf <- hr_sf %>%
+  mutate(geometry = st_buffer(geometry, dist = 2000))  # distance in meters (if CRS is UTM)
+plot(hr_sf$geometry)
+
+# #clip to the study area- there was only small sections out of the study area
+hr_clipped <- st_intersection(hr_sf, study_area)
+
+## reduce dataset -------------
+
+dat = st_as_sf(dat,coords = c("x","y"),crs=crs_proj,remove=F)
+
+## only keep points in study area
+# temp = st_intersection(dat,study_area)  # takes a long time to run
+
+temp = terra::extract(template_rast,vect(dat))
+tokeep = !is.na(temp$Id)
+
+if(length(tokeep)>0) dat = dat[tokeep,]
+
+# names(dat)
+dat$WEEK = week(dat$timestamp)
+dat$WDAY = wday(dat$timestamp)
+dat$YDAY = yday(dat$timestamp)
+dat$YEAR = year(dat$timestamp)
+
+dat <- dat |>      # thin to one or a few obs per ID per week each year
+  group_by(ID, YEAR, YDAY) |> 
+  # filter(WDAY%in%c(2,5)) |> 
+  slice_sample(n=1) |> 
+  ungroup()
+
+dat <- dat |> 
+  group_by(ID, YEAR, WEEK) |> 
+  filter(WDAY %in% c(2,5))  |>    # select observations spaced apart
+  ungroup()
+
+dat$IDYEAR = paste0(as.character(dat$ID),"_",dat$YEAR)
+
+all_idyrs = sort(unique(dat$IDYEAR))
+idyrlist = lapply(all_idyrs, function(t) subset(dat,IDYEAR==t) )
+nobs = sapply(idyrlist,nrow)
+names(nobs)= all_idyrs
+sort(nobs,decreasing = T)    # KTS: some IDs have less than 50 observations- let's remove some of the ones wiht very little information. I'll try using 200 as a minimum for now...
+
+days <- sapply(idyrlist,function(t) interval(min(t$timestamp),max(t$timestamp))/days() )
+names(days) = all_idyrs
+sort(round(days),decreasing = T)   # a few that are only a few days long... let's only keep those with more than 50 days of observations...
+
+# remove individuals with too few data points
+tokeep <- intersect(names(days[days>50]),names(nobs[nobs>50]))
+
+dat <- subset(dat,IDYEAR%in%tokeep)    # KTS: filter data to only include those with enough data...
+nrow(dat)
+
+allids = sort(unique(dat$ID))
+hr_clipped <- subset(hr_clipped, ID%in%allids)   # remove ids from spatial dataset as well
+
+# table(dat$ID)  # check
+
+all_ids = sort(unique(dat$ID))      # make ID factor
+dat$ID = factor(dat$ID,levels=all_ids)
+hr_clipped$ID = factor(hr_clipped$ID,levels=all_ids)
+
+ggplot() +
+  geom_sf(data = hr_clipped, aes(fill = ID), alpha = 0.5) +
+  geom_sf(data = study_area, fill = NA, color = "black", size = 1) +
+  geom_sf(data = dat, color = "red", size = 0.8, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Home Ranges")+
+  theme(legend.position="none")
+
+## remove points outside the MCP-------------
+
+# Create a list of individual IDs
+
+# Create list of unique IDs
+library(sf)
+
+class(dat)
+# dat <- st_as_sf(dat, coords = c("X", "Y"), crs = crs_proj)  # or use your correct CRS
+# dat <- st_transform(dat, st_crs(hr_clipped))
+
+all_ids <- unique(dat$ID)   
+length(all_ids)   
+
+# table(dat$ID)
+
+# Loop over each ID and retain used points within their MCP
+usedpoints_hr <- map_dfr(all_ids, function(ID) {
+  # Subset MCP and used points for this individual
+  kde_i <- hr_clipped %>% filter(ID == !!ID)     # the !! is the 'bang-bang' operator, which 'unquotes' a variable name to refer to an object rather than the object's name
+  used_i <- dat %>% filter(ID == !!ID)
+  
+  # Keep only used points inside the MCP
+  used_in_hr <- used_i[st_within(used_i, kde_i, sparse = FALSE)[, 1], ]
+  
+  return(used_in_hr)
+})
+
+# sort(table(usedpoints_hr$ID))
+# sort(table(usedpoints_hr$ID))
+
+ggplot() +
+  geom_sf(data = hr_clipped, aes(fill = as.factor(ID)), alpha = 0.3, color = "black") +
+  geom_sf(data = usedpoints_hr, color = "darkgreen", size = 1, shape = 21, fill = "green") +
+  theme_minimal() +
+  labs(
+    title = "Used Points Within Each Individual's hr",
+    fill = "ID"
+  ) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.title = element_text(size = 14)
+  ) +
+  theme(legend.position = "none")
+
+# rename dat with only points in mcp 
+
+dat <- usedpoints_hr
+nrow(dat) 
+
+all_ids <- sort(unique(dat$ID)) 
+length(all_ids)  # 25 individuals
+
+all_yrs <- sort(unique(dat$YEAR))
+length(all_yrs)   # 8 winters
+
+ggplot() +
+  geom_sf(data = hr_clipped, aes(fill = ID), alpha = 0.5) +
+  geom_sf(data = study_area, fill = NA, color = "black", size = 1) +
+  geom_sf(data = usedpoints_hr, color = "red", size = 0.8, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Home Ranges") +
+  theme(legend.position = 'none')
+
+##  process covariate rasters ---------
+
+plot(cov_layers$elevation)
+covars_list
+
+### reproject all covariate rasters to the template raster dimension ----------------0
+
+res(cov_layers)
+res(template_rast)
+
+thisstk = terra::project(cov_layers[[covars_list]],template_rast)   
+res(thisstk)
+covars_df = as.data.frame(thisstk, xy=T, cells = TRUE, na.rm = TRUE)
+
+# make master data frame for analysis ------------
+
+hr_clipped$hectares <- hr_clipped$area/10000
+
+## make raster of point density (response) --------------
+
+# terra::plot(template_rast)
+
+## Convert sf points to SpatVector
+points_vect <- vect(dat)
+plot(points_vect)
+
+## Count telemetry points per cell  ---------
+
+    # note: tell hanna to change 'length' to 'count' here 
+point_counts <- (template_rast-1) + rasterize(points_vect, template_rast, 
+                                          fun = "count",background=0)
+
+terra::plot(point_counts)   # plot count raster (response variable)
+
+## Create master data frame for analysis --------------
+
+master_df <- as.data.frame(point_counts, cells = TRUE, na.rm = TRUE, xy=TRUE)
+names(master_df) <- c("cell","x","y","n_points")
+
+names(covars_df)[1:3]
+
+master_df <- left_join(master_df,covars_df,by=c("cell","x","y"))
+nrow(master_df)
+
+## make raster of survey effort (exposure) -----------
+
+poly_vect = vect(hr_clipped)
+
+# Extract: get which cells each polygon intersects
+    # this returns a data frame with one row for each grid cell intersected by each hr polygon
+
+extracted <- terra::extract(template_rast, poly_vect, cells = TRUE, ID = TRUE)
+
+# Reverse grouping: for each cell, list all associated polygon IDs
+cells_with_polygons <- extracted %>%
+  group_by(cell) %>%
+  summarise(
+    polygon_ids = list(ID),  # List of all polygon IDs
+    n_polygons = n()          # Count of polygons
+  )
+
+# exposure: sum across individuals overlapping this cell: 
+#  specifically: for each cell, the total weeks of exposure per square km of home range  
+#    takes a minute to run...
+
+all_ids = sort(unique(dat$ID))
+idlist = lapply(all_ids, function(t) subset(dat,ID==t) )
+days <- sapply(idlist,function(t) interval(min(t$timestamp),max(t$timestamp))/days() )
+names(days) = all_ids
+sort(round(days),decreasing = T)   # a few that are only a few days long... let's only keep those with more than 50 days of observations...
+
+
+master_df$exposure = 0.0    # initialize exposure variables (total exposure and number of ids)
+master_df$nids = 0.0       # not currently used- authors of sdmTMB are working on implementing a 'dispformula' and this would be used for that purpose... 
+r=1
+for(r in 1:nrow(cells_with_polygons)){
+  cl = cells_with_polygons$cell[r]
+  pids = cells_with_polygons$polygon_ids[r][[1]]
+  master_df$nids[master_df$cell==cl] = length(pids)
+  p=1
+  for(p in 1:length(pids)){
+    thispid = pids[p]
+    thisid = as.character(hr_clipped$ID[thispid])
+    thishr = hr_clipped[thispid,]$geometry
+    thisarea_sqkm = as.numeric(hr_clipped[thispid,]$area)/1000000 
+    thistime_weeks = as.numeric(days[thisid])/7
+    # plot(thishr)
+    master_df$exposure[master_df$cell==cl] <- master_df$exposure[master_df$cell==cl] + thistime_weeks/thisarea_sqkm
+    
+  }
+}
+
+## visualize the response variable ------
+
+hist(master_df$n_points)   # lots of zeros- zero inflated model may be appropriate...
+
+## save master df version 1 ----------
+
+hist(master_df$exposure)
+
+master_df <- subset(master_df, exposure>0.0)   # only keep cells 'exposed' to at least one individual
+master_df$offset = log(master_df$exposure)     # offset terms for count model
+
+thisfile = "data/master_count_df_1000m.csv"
+write_csv(master_df,thisfile)
+
+# process and scale covariates ----------
+
+#  note: can start here, if you first read in master count df.
+
+master_df <- read.csv(thisfile)
+
+names(master_df)
+varstouse = covars_list
+
+## a priori variable thinning --------
+
+varstouse  # remove sin aspect and raw aspect
+varstouse = setdiff(varstouse,c("aspect","aspect_sin"))
+
+## correlation matrix -------
+
+library(corrplot)
+library(ggcorrplot)
+library(RColorBrewer) 
+
+# Compute the correlation matrix
+names(master_df)
+corr_matrix <- cor(master_df[,varstouse]) 
+
+corrplot(corr_matrix, 
+         method = "circle",      # Use circles (other options: "square", "number", "pie", "shade", "color")
+         type = "upper",         # Display only the upper triangle
+         order = "hclust",       # Reorder variables using hierarchical clustering
+         addrect = 2,            # Add rectangles around hierarchical clusters
+         col = brewer.pal(n = 8, name = "RdBu"), # Use a diverging color palette
+         tl.col = "black",       # Color of text labels 
+         tl.srt = 45,            # Rotate text labels by 45 degrees
+         p.mat = cor_pmat(master_df[,varstouse]), # Add p-values (requires ggcorrplot package for this function)
+         sig.level = 0.01,       # Mark insignificant correlations (e.g., with an 'X')
+         insig = "blank"         # Hide insignificant correlations
+)
+
+# alternative version
+corrplot(corr_matrix, 
+         method = "color",
+         type = "upper",           # Show only upper triangle
+         order = "hclust",         # Cluster similar variables
+         addCoef.col = "black",    # Add correlation coefficients
+         tl.col = "black",         # Text label color
+         tl.srt = 45,              # Text label rotation
+         diag = FALSE)             # Hide diagonal
+
+
+    # remove roughness- too correlated with slope (could remove slope instead)
+varstouse = setdiff(varstouse,c("roughness"))
+
+varstouse2 = c("ELEV_s","SLOPE_s","ASPECT_s","TPI_s","AFG_s","PFG_s","SHRUB_s","TREE_s")
+
+##  transform, scale and center covariates  
+
+transforms <- rep("none",length(varstouse))  # store transformations (for backtransformations)
+names(transforms) <- varstouse2
+
+offsets <- rep(0,length(varstouse))   # store offsets (for backtransformations)
+names(offsets) <- varstouse2
+
+hist(master_df$elevation)
+master_df$ELEV_s <- scale(master_df$elevation)[,1]
+hist(master_df$ELEV_s)   # okay untransformed
+
+hist(master_df$tpi)
+master_df$TPI_s <- scale(master_df$tpi)[,1]
+master_df$TPI_s[master_df$TPI_s>4] = 4
+master_df$TPI_s[master_df$TPI_s<(-4)] = -4
+hist(master_df$TPI_s)
+
+hist(master_df$slope)
+master_df$SLOPE_s = scale(log(master_df$slope+1))[,1]
+hist(master_df$SLOPE_s)
+transforms["SLOPE_s"] <- "log"
+offsets["SLOPE_s"] <- 1
+
+hist(master_df$TREE)
+master_df$TREE_s = scale(log(master_df$TREE+.5))[,1]
+hist(master_df$TREE_s)
+transforms["TREE_s"] <- "log"
+offsets["TREE_s"] <- 0.5
+
+hist(master_df$SHRUB)
+master_df$SHRUB_s = scale(master_df$SHRUB)[,1]
+hist(master_df$SHRUB_s)
+
+hist(master_df$PFG)
+master_df$PFG_s = scale(master_df$PFG)[,1]
+hist(master_df$PFG_s)
+
+hist(master_df$AFG)
+master_df$AFG_s = scale(master_df$AFG)[,1]
+hist(master_df$AFG_s)
+
+hist(master_df$aspect_cos)
+master_df$ASPECT_s = scale(master_df$aspect_cos)[,1]
+hist(master_df$ASPECT_s)
+
+### make data frame for backtransformations etc
+
+means <- sapply(1:length(varstouse), function(t) {
+  if(transforms[t]=="log"){
+    mean(log(master_df[[varstouse[t]]]+ offsets[t]) ,na.rm=T)
+  }else{
+    mean(master_df[[varstouse[t]]],na.rm=T)
+  }
+})
+names(means) =varstouse2
+
+sds <- sapply(1:length(varstouse), function(t) {
+  if(transforms[t]=="log"){
+    sd(log(master_df[[varstouse[t]]]+ offsets[t]) ,na.rm=T)
+  }else{
+    sd(master_df[[varstouse[t]]],na.rm=T)
+  }
+})
+names(sds) =varstouse2
+
+transform_df = data.frame(
+  origvar = varstouse,
+  modvar = varstouse2,
+  transform = transforms,
+  offset = offsets,
+  mean = means,
+  sd = sds,
+  min = sapply(varstouse,function(t) min(master_df[[t]],na.rm=T) ),   # NOTE: this is on original scale...
+  max = sapply(varstouse,function(t) max(master_df[[t]],na.rm=T) ),
+  min2 = sapply(varstouse2,function(t) min(master_df[[t]],na.rm=T) ),   # NOTE: this is on modified scale...
+  max2 = sapply(varstouse2,function(t) max(master_df[[t]],na.rm=T) )
+  
+)
+
+
+## save data frames -----------
+
+write_csv(master_df,"data/master_count_df_500m.csv")
+write_csv(transform_df,"data/transform_df_count_500m.csv")
+
+
+# fit models -----------
+
+## fit with gam/mgcv (nonspatial)  ---------
+
+length(which(!complete.cases(master_df)))  # 0 rows with one or more NA
+master_df <- na.omit(master_df)   # 2524 cells
+
+names(master_df)
+
+fm = formula(n_points ~ 
+             + s(ELEV_s, bs = "cr",k=10) 
+             + s(ASPECT_s, bs = "cr",k=5) 
+             + s(TREE_s, bs = "cr",k=5)
+             + s(SLOPE_s, bs = "cr",k=5) 
+             + s(PFG, bs = "cr",k=5)  # + ti(SNOW, WATER, bs = "cr",k=5)  #this interaction is an example
+             + offset(offset)  ) 
+
+#
+
+mod_gam = gam(
+  fm,
+  data = master_df,
+  family = nb(link = "log"),
+  method = "REML"
+)
+
+summary(mod_gam)
+
+# plot(mod_gam)
+summary(mod_gam)
+library(gratia)
+draw(mod_gam)
+
+## model checking --------
+
+gam.check(mod_gam)
+
+library(DHARMa)
+r = DHARMa::simulateResiduals(mod_gam)   # check with DHARMa
+DHARMa::testResiduals(r)   # okay but not perfect
+DHARMa::testZeroInflation(r)  # zero inflated!
+
+hist(master_df$n_points)
+
+### assess spatial correlation of residuals -------
+
+library(spdep)   # note: might want to install spDataLarge as well 
+library(sf)
+
+# Assuming you have:
+# gam_model - your fitted GAM
+# spatial_data - sf object with coordinates
+
+# Extract residuals
+residuals <- residuals(mod_gam, type = "response")
+
+master_df$res <- residuals
+
+ggplot(master_df,aes(x,y,col=res)) +   # plot residuals spatially
+  geom_point()
+
+master_df_sp  = st_as_sf(master_df,coords = c("x","y"),remove = F )
+
+# Get coordinates
+coords <- st_coordinates(master_df_sp)
+
+# Create spatial weights (k-nearest neighbors)
+knn <- knearneigh(coords, k = 8)
+nb <- knn2nb(knn)
+weights <- nb2listw(nb, style = "W")
+
+# Moran's I test
+moran_test <- moran.test(residuals, weights)
+print(moran_test)     # lots of spatial autocorrelation!
+
+# Monte Carlo simulation for significance
+# moran_mc <- moran.mc(residuals, weights, nsim = 999)
+# print(moran_mc)   # tests are signicant. Morans I of 0.37 indicates substantial autocorrelation
+
+moran_plot <- moran.plot(residuals, weights, 
+                         main = "Moran's I Plot for GAM Residuals")
+
+
+## Calculate correlogram (Moran's I at different lags) (takes some time)
+correlogram <- sp.correlogram(nb, residuals, 
+                              order = 10,          # Number of lags
+                              method = "I",        # Moran's I
+                              zero.policy = TRUE)
+
+# Base R plot
+plot(correlogram, main = "Spatial Correlogram")
+
+## run GAM with spatial smoother to reduce autocorrelation  --------
+
+names(master_df)
+
+# tokeep = master_df$cell %% 2 == 0
+# 
+# master_df2 = master_df[tokeep,]
+
+mod_spgam = update(mod_gam, .~.+s(x,y,k=100))
+
+gratia::appraise(mod_spgam)   # okay but still evidence for zero inflation
+
+summary(mod_spgam)
+
+
+# plot(mod_spgam)
+# draw(mod_spgam)
+
+
+### model checking --------
+gam.check(mod_spgam)
+r = DHARMa::simulateResiduals(mod_spgam)   # check with DHARMa
+DHARMa::testResiduals(r)   # not great fit
+DHARMa::testZeroInflation(r)  # zero inflated
+
+### assess spatial correlation of residuals -------
+
+# Extract residuals
+residuals <- residuals(mod_spgam, type = "pearson")
+master_df$res <- residuals
+
+ggplot(master_df,aes(x,y,col=res)) +   # plot residuals spatially
+  geom_point()    # better
+
+# Moran's I test
+moran_test <- moran.test(residuals, weights)  # still nearly as high as before
+print(moran_test)
+
+# try plotting out residuals?
+
+# Monte Carlo simulation for significance
+# moran_mc <- moran.mc(residuals, weights, nsim = 999)
+# print(moran_mc)   # tests are significant. Morans I of 0.37 indicates substantial autocorrelation
+
+moran_plot <- moran.plot(residuals, weights, 
+                         main = "Moran's I Plot for GAM Residuals")
+
+
+## Calculate correlogram (Moran's I at different lags)
+correlogram <- sp.correlogram(nb, residuals, 
+                              order = 10,          # Number of lags
+                              method = "I",        # Moran's I
+                              zero.policy = TRUE)
+
+plot(correlogram, main = "Spatial Correlogram")  # ### looks better -------
+
+## make raster surface for predicted use intensity  ----------
+
+t = 6
+for(t in 1:nrow(transform_df)){
+  thisvar=transform_df$origvar[t]
+  thisvar2=transform_df$modvar[t]
+  if(is.null(covars_df[[thisvar2]])){
+    if(transform_df$transform[t]=="log"){
+      covars_df[[thisvar2]] = log(covars_df[[thisvar]]+transform_df$offset[t])
+      covars_df[[thisvar2]] = (covars_df[[thisvar2]] - transform_df$mean[t])/transform_df$sd[t]
+    } else{
+      covars_df[[thisvar2]] = (covars_df[[thisvar]] - transform_df$mean[t])/transform_df$sd[t]
+    }
+  }
+  covars_df[[thisvar2]] = pmin(pmax(covars_df[[thisvar2]],transform_df$min2[t]),transform_df$max2[t])
+  
+}
+
+thismod= mod_spgam
+
+covars_df$offset=0
+
+pred = predict(thismod,newdata = covars_df, type="response") 
+preddf = as.data.frame(cbind(cell=covars_df$cell,pred=pred))
+
+pred_rast = template_rast
+pred_rast[preddf$cell] = preddf$pred
+
+# hist(preddf$pred)
+
+terra::plot(pred_rast)
+
+my_breaks <- c(-Inf,0.15,0.2, 0.3, 0.5, 0.75, 1, Inf) # 5 bins
+my_colors_classified <- viridis::viridis(n = 5, option = "D")
+
+r = classify(pred_rast,my_breaks )
+terra::plot(r , col = my_colors_classified, main = "Classified Raster Plot")
+
+
+# glmmTMB model- with spatial smooth ---------
+
+library(glmmTMB)
+
+fm = formula(n_points ~ 
+             + s(ELEV_s, k=10) 
+             + s(ASPECT_s, k=3)
+             + s(SLOPE_s, k=3)
+             + poly(TREE_s,2)
+             + PFG_s 
+             + s(x,y, bs="gp",k=50, m = c(2, 1000))    # spatial smooth
+             + offset(offset)  ) 
+
+library(glmmTMB)
+# names(master_df)
+mod_tmb1  = glmmTMB(fm,
+                    ziformula = ~ ELEV_s,
+                    dispformula = ~ log(nids),
+                    data=master_df,
+                    family=nbinom2(link="log")
+)
+
+summary(mod_tmb1)   # non-convergence problem 
+
+mod_tmb2 <- update(mod_tmb1, .~.-s(x,y, bs="gp",k=50, m = c(2, 1000)))
+
+summary(mod_tmb2)
+
+r = DHARMa::simulateResiduals(mod_tmb2)   # check with DHARMa
+DHARMa::testResiduals(r)   # better but still not perfect
+DHARMa::testZeroInflation(r)  # better
+
+
+### assess spatial correlation of residuals -------
+
+# # Extract residuals
+# residuals <- residuals(mod_tmb1, type = "response")
+# 
+# # Create spatial weights (k-nearest neighbors)
+# knn <- knearneigh(coords[tokeep,], k = 8)
+# nb <- knn2nb(knn)
+# weights <- nb2listw(nb, style = "W")
+# 
+# # Moran's I test
+# moran_test <- moran.test(residuals, weights)  # still nearly as high as before
+# print(moran_test)
+
+# library(marginaleffects)
+library(ggeffects)
+
+# pred_elev <- marginaleffects::predictions(model, 
+#                        newdata = datagrid(x1 = seq(0, 10, length.out = 100),
+#                                           x2 = 0,
+#                                           x3 = mean,
+#                                           z1 = 0),
+#                        type = "response")
+
+pred_elev <- ggpredict(mod_tmb2, terms = "ELEV_s [all]")
+plot(pred_elev) +
+  labs(title = "Effect of elev on intensity",
+       x = "Elevation", y = "Predicted Count")
+
+pred_slope <- ggpredict(mod_tmb2, terms = "SLOPE_s [all]")
+plot(pred_slope) +
+  labs(title = "Effect of slope on intensity",
+       x = "slope", y = "Predicted Count")
+
+pred_pfg <- ggpredict(mod_tmb1, terms = "PFG_s [all]")
+plot(pred_pfg) +
+  labs(title = "Effect of pfg on intensity",
+       x = "rd", y = "Predicted Count")
+
+summary(mod_tmb2)
+
+## use sdmTMB to build more sophisticated spatial regression models -------
+
+library(sdmTMB)
+
+# Scale coordinates (recommended for GP models)
+master_df$x_s <- master_df$x/1000
+master_df$y_s <- master_df$y/1000
+
+mesh <- make_mesh(master_df, xy_cols = c("x_s", "y_s"), cutoff = 2)
+mesh$mesh$n   # compare mesh nodes to number of observations (nodes should be quite a bit smaller!)
+
+names(master_df)
+library(inlabru)
+ggplot() +
+  inlabru::gg(mesh$mesh) +
+  geom_point(data=master_df, aes(x_s,y_s,col=n_points),size=0.4)
+
+
+plot(mesh)  # simple mesh plot
+
+varstouse
+
+fit <- sdmTMB(
+  n_points ~ poly(ELEV_s,2) + SLOPE_s + TREE_s + PFG_s ,
+  data = master_df,
+  mesh = mesh,
+  offset = "offset",
+  family = delta_truncated_nbinom2(),   # hurdle model (like a zero inflation model)
+  spatial = "on"
+)
+
+sanity(fit)
+
+summary(fit)
+
+tidy(fit, model=1,effects = "fixed",conf.int = T)
+tidy(fit, model=1,effects = "ran_pars",conf.int = T)
+
+tidy(fit, model=2,effects = "fixed",conf.int = T)
+tidy(fit, model=2,effects = "ran_pars",conf.int = T)
+
+x_range <- range(master_df$x_s)
+y_range <- range(master_df$y_s)
+
+p <- predict(fit, type="link")  
+
+p$x = p$x_s
+p$y = p$y_s
+
+# p <- predict(fit)
+
+names(p)
+# zero inflation
+ggplot(p, aes(x, y, z = est_non_rf1)) + geom_contour_filled()
+ggplot(p, aes(x, y, z = est_rf1)) + geom_contour_filled()
+ggplot(p, aes(x, y, z = est1)) + geom_contour_filled() #+
+# scale_fill_viridis_c(trans = "sqrt")
+
+# count model
+ggplot(p, aes(x, y, z = est_non_rf2)) + geom_contour_filled()
+ggplot(p, aes(x, y, z = est_rf2)) + geom_contour_filled()
+ggplot(p, aes(x, y, z = est2)) + geom_contour_filled()
+# note: could easily plot out the spatial field [omega], or the spatial field components, or the fixed effects, etc.
+
+
+# basic residual tests 
+
+p$resids <- residuals(fit,model=1) # randomized quantile residuals
+hist(p$resids)
+
+qqnorm(p$resids);abline(a = 0, b = 1)    # looks good
+
+  # check spatial correlation in residuals
+
+ggplot(p, aes(x, y, col = resids)) + scale_colour_gradient2() +     # looks pretty uncorrelated
+  geom_point()
+
+ggplot(master_df,aes(x,y,col=res)) +   # plot residuals spatially
+  geom_point()    # better
+
+# Moran's I test
+moran_test <- moran.test(p$resids, weights)  # still nearly as high as before
+print(moran_test)   # much better...
+
+# try plotting out residuals?
+
+# Monte Carlo simulation for significance
+# moran_mc <- moran.mc(residuals, weights, nsim = 999)
+# print(moran_mc)   # tests are significant. Morans I of 0.37 indicates substantial autocorrelation
+
+moran_plot <- moran.plot(p$resids, weights, 
+                         main = "Moran's I Plot for Residuals")
+
+
+## Calculate correlogram (Moran's I at different lags)
+correlogram <- sp.correlogram(nb, p$resids, 
+                              order = 10,          # Number of lags
+                              method = "I",        # Moran's I
+                              zero.policy = TRUE)
+
+plot(correlogram, main = "Spatial Correlogram")  # ### looks better -------
+
+
+# DHARMa tests 
+
+s = simulate(fit, nsim = 500, type = "mle-mvn")
+dharma_residuals(s, fit, test_uniformity = TRUE)  # looks good
+
+
+# Visualizing a marginal effect ----------------------------------------
+
+# See the visreg package or the ggeffects::ggeffect() or
+# ggeffects::ggpredict() functions
+# To do this manually:
+    # TODO: this doesn't look great- check the syntax
+
+nd <- data.frame(
+  SLOPE_s = seq(min(master_df$SLOPE_s), max(master_df$SLOPE_s), length.out = 100),
+  ELEV_s = 0, PFG_s = 0, TREE_s = 0
+)
+nd$offset=1
+
+p <- predict(fit, newdata = nd, se_fit = TRUE, re_form = NA,offset=nd$offset)
+names(p)
+ggplot(p, aes(SLOPE_s, est,
+              ymin = est - 1.96 * est_se, ymax = est + 1.96 * est_se)) +
+  geom_line() + geom_ribbon(alpha = 0.4)
+
+
+
+#  Predict to the entire study area
+
+# ?predict.sdmTMB
+
+covars_df$x_s = covars_df$x / 1000
+covars_df$y_s = covars_df$y / 1000
+p2 = predict(fit,newdata=covars_df,type="link",offset=covars_df$offset)
+
+ggplot(p2, aes(x, y, z = est1)) + geom_contour_filled()
+ggplot(p2, aes(x, y, z = est2)) + geom_contour_filled()
+
+## TODO: spatial residuals, other checks, etc.
+# plot_smooth for visualizing smooths. plot random field, linear predictor,
+
+
+# NOTE: omega is spatial random field, epsilon is spatiotemporal random effects
+
+
+## TODO: cross validation
+
+
+
