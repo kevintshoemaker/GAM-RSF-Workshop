@@ -1,0 +1,26 @@
+{
+    "id": "3319DA6D",
+    "path": "~/GitHub/GAM-RSF-Workshop/RSF_SIM/03_Run_RSF_Simdat.R",
+    "project_path": "RSF_SIM/03_Run_RSF_Simdat.R",
+    "type": "r_source",
+    "hash": "268141200",
+    "contents": "",
+    "dirty": false,
+    "created": 1770007068377.0,
+    "source_on_save": false,
+    "relative_order": 10,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "41,0",
+        "scrollLine": "31"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1770007147,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1770007147740,
+    "read_only": false,
+    "read_only_alternatives": []
+}
