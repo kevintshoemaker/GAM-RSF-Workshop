@@ -4,6 +4,7 @@
 # clear workspace ------------
 
 rm(list = ls())
+# gc()
 
 # install packages----------------------------------
 
@@ -74,6 +75,7 @@ realpoints <- st_intersection(realpoints,study_area)
 
 plot(st_geometry(study_area),lwd=2)
 plot(st_geometry(realpoints),col="darkgreen",add=T,pch=20,cex=.2)
+
 
 ## convert to data frame--------------------------------
 
@@ -366,71 +368,7 @@ for(y in 1:length(allyears)){
 
 nrow(master_df)  # about 60k observations...
 
-## make raster of survey effort (exposure) -----------
-
-poly_vect = vect(hr_clipped)
-names(poly_vect)
-# poly_vect$ID = as.numeric(as.character(poly_vect$ID))
-
-# Extract: get which cells each polygon intersects
-    # this returns a data frame with one row for each grid cell intersected by each hr polygon
-
-extracted <- terra::extract(template_rast, poly_vect, cells = TRUE, ID = TRUE)
-
-# Reverse grouping: for each cell, list all associated polygon IDs
-cells_with_polygons <- extracted %>%
-  group_by(cell) %>%
-  summarise(
-    polygon_ids = list(ID),  # List of all polygon IDs
-    n_polygons = n()          # Count of polygons
-  )
-
-# exposure: sum across individuals overlapping this cell: 
-#  specifically: for each cell, the total weeks of exposure per square km of home range  
-#    takes a minute to run...
-
-#    since we want to run a spatiotemporal model, we adjust effort based on the year. Some cells have more 'exposure' in one year vs another
-
-
-all_idyrs
-idyrlist = lapply(all_idyrs, function(t) subset(dat,IDYEAR==t) )
-names(idyrlist) = all_idyrs
-sapply(idyrlist,nrow)
-all_idyrs = all_idyrs[sapply(idyrlist,nrow)>0]
-idyrlist = idyrlist[all_idyrs]
-days <- sapply(idyrlist,function(t) interval(min(t$DATE),max(t$DATE))/days() )
-names(days) = all_idyrs
-
-ids_byyear = lapply(allyears,function(t){temp = subset(dat,YEAR==t) ; levels(droplevels(temp$ID)) }  )
-names(ids_byyear) = allyears
-ids_byyear$`2009`
-
-master_df$exposure = 0.0    # initialize exposure variables (total exposure and number of ids)
-master_df$nids = 0.0       # not currently used- authors of sdmTMB are working on implementing a 'dispformula' and this would be used for that purpose... 
-r=57
-for(r in 1:nrow(cells_with_polygons)){
-  cl = cells_with_polygons$cell[r]    # cell id
-  pids = cells_with_polygons$polygon_ids[r][[1]]
-  p=1
-  for(p in 1:length(pids)){
-    thispid = pids[p]
-    thisid = as.character(hr_clipped$ID[thispid])  # individual id with range overlap
-    thishr = hr_clipped[thispid,]$geometry
-    thisarea_sqkm = as.numeric(hr_clipped[thispid,]$area)/1000000 
-    y=2
-    for(y in 1:length(allyears)){
-      thisy = as.character(allyears[y])
-      if(thisid %in% ids_byyear[[thisy]]){
-        thisr = which(master_df$cell==cl & master_df$year == allyears[y])
-        master_df$nids[thisr] = master_df$nids[thisr] + 1
-        thisidyr = paste0(thisid,"_",thisy)
-        thistime_weeks = as.numeric(days[thisidyr])/7
-        # plot(thishr)
-        master_df$exposure[thisr] <- master_df$exposure[thisr] + thistime_weeks/thisarea_sqkm
-      }
-    }
-  }
-}    # note: takes a couple minutes to run- I'm pretty sure I could make this more efficient but I don't have the time
+#  NOTE: 'exposure' variable was computed here 
 
 ## visualize the response variable ------
 
@@ -438,12 +376,12 @@ hist(master_df$n_points)   # lots of zeros- zero inflated model may be appropria
 
 ## save master df version 1 ----------
 
-hist(master_df$exposure)
+# hist(master_df$exposure)
 
-master_df <- subset(master_df, exposure>0.000)   # only keep cells 'exposed' to at least one individual for one year
+# master_df <- subset(master_df, exposure>0.000)   # only keep cells 'exposed' to at least one individual for one year
      # about 30k observations total
 
-master_df$offset = log(master_df$exposure)     # offset terms for count model
+# master_df$offset = log(master_df$exposure)     # offset terms for count model
 
 thisfile = "RSF_REAL/master_count_df_250m.csv"
 write_csv(master_df,thisfile)
@@ -605,8 +543,9 @@ names(master_df)
 
 fm = formula(n_points ~ 
              WATER_s + ASPECT_s + TREE_s + SLOPE_s + PFG_s
-             + s(ELEV_s, bs = "cr",k=5) 
-             + offset(offset)  ) 
+             + s(ELEV_s, bs = "cr",k=10) 
+             # + offset(offset)  
+             ) 
 
 #
 
@@ -628,22 +567,14 @@ library(gratia)
 
 gam.check(mod_gam)  # may need more knots for elevation
 
-gratia::appraise(mod_gam)   # okay
+# gratia::appraise(mod_gam)   # okay  (takes a while to run)
 
 library(DHARMa)
 r = DHARMa::simulateResiduals(mod_gam)   # check with DHARMa
-DHARMa::testResiduals(r)   # looks surprisingly good
+DHARMa::testResiduals(r)   # looks pretty good
 DHARMa::testZeroInflation(r)  # no zero inflation detected
 
 hist(master_df$n_points)
-
-library(ggeffects)
-
-pp = ggpredict(mod_gam, c("SLOPE_s [all]") )
-plot(pp)
-
-pp = ggpredict(mod_gam, c("WATER_s [all]") )
-plot(pp)
 
 ### assess spatial correlation of residuals -------
 
@@ -686,12 +617,23 @@ moran_plot <- moran.plot(residuals, weights,
 
 ## Calculate correlogram (Moran's I at different lags) (takes some time)
 correlogram <- sp.correlogram(nb, residuals, 
-                              order = 8,          # Number of lags
+                              order = 10,          # Number of lags
                               method = "I",        # Moran's I
                               zero.policy = TRUE)
 
 # Base R plot
 plot(correlogram, main = "Spatial Correlogram")
+
+
+# univariate plots 
+
+library(ggeffects)
+
+pp = ggpredict(mod_gam, c("SLOPE_s [all]") )
+plot(pp)
+
+pp = ggpredict(mod_gam, c("WATER_s [all]") )
+plot(pp)
 
 ## run GAM with spatial smoother to reduce autocorrelation  --------
 
@@ -714,12 +656,9 @@ summary(mod_spgam)
 
 ### model checking --------
 gam.check(mod_spgam)
-
-k.check(mod_spgam)
-
 r = DHARMa::simulateResiduals(mod_spgam)   # check with DHARMa
-DHARMa::testResiduals(r)   # worse fit with spatial smooth?
-DHARMa::testZeroInflation(r)  # not zero inflated
+DHARMa::testResiduals(r)   # not great fit
+DHARMa::testZeroInflation(r)  # zero inflated
 
 ### assess spatial correlation of residuals -------
 
@@ -838,28 +777,29 @@ library(sdmTMB)
 master_df$x_s <- master_df$x/1000
 master_df$y_s <- master_df$y/1000
 
-mesh <- make_mesh(master_df, xy_cols = c("x_s", "y_s"), cutoff = 1)
+mesh <- make_mesh(master_df, xy_cols = c("x_s", "y_s"), cutoff = 1.25)
 mesh$mesh$n   # compare mesh nodes to number of observations (nodes should be quite a bit smaller!)
 
 names(master_df)
 library(inlabru)
 ggplot() +
-  inlabru::gg(mesh$mesh) 
+  inlabru::gg(mesh$mesh) #+
   # geom_point(data=master_df, aes(x_s,y_s,col=n_points),size=0.4)
 
 
-plot(mesh)  # simple mesh plot
+# plot(mesh)  # simple mesh plot
 
 varstouse
 
-# takes about a minute to fit (which is pretty lightning fast actually)
+   # note: this is a spatiotemporal model- separate spatial random field estimated each year!
+# takes a few minutes to fit (which is pretty lightning fast actually)
 fit <- sdmTMB(
-  n_points ~ poly(ELEV_s,2) + WATER_s + SLOPE_s + TREE_s + SHRUB_s + PFG_s ,
+  n_points ~ poly(ELEV_s,2) + WATER_s + SLOPE_s + TREE_s + SHRUB_s ,
   data = master_df,
   mesh = mesh,
-  offset = "offset",
+  # offset = "offset",
   family = nbinom2(),   
-  time = "year"   # include spatiotemporal and spatial random field
+  time = "year"   # iid spatiotemporal model
 )
 
 sanity(fit)
@@ -881,8 +821,7 @@ p$y = p$y_s
 # p <- predict(fit)
 
 names(p)
-ggplot(p, aes(x, y, z = omega_s)) + geom_contour_filled() + facet_wrap(~year)
-ggplot(p, aes(x, y, z = epsilon_st)) + geom_contour_filled() + facet_wrap(~year)
+
 ggplot(p, aes(x, y, z = est_non_rf)) + geom_contour_filled() + facet_wrap(~year)
 ggplot(p, aes(x, y, z = est_rf)) + geom_contour_filled() + facet_wrap(~year)
 ggplot(p, aes(x, y, z = est)) + geom_contour_filled() + facet_wrap(~year)
@@ -931,7 +870,7 @@ plot(correlogram, main = "Spatial Correlogram")  # ### looks better -------
 # DHARMa tests 
 
 s = simulate(fit, nsim = 500, type = "mle-mvn")
-dharma_residuals(s,fit, test_dispersion = T)
+dharma_residuals(s, fit, test_uniformity = TRUE)  # looks good
 res = dharma_residuals(s, fit, return_DHARMa = T)  
 
 testResiduals(res)   # not passing all tests
@@ -941,14 +880,15 @@ testResiduals(res)   # not passing all tests
 # See the visreg package or the ggeffects::ggeffect() or
 # ggeffects::ggpredict() functions
 # To do this manually:
+    # TODO: this doesn't look great- check the syntax
 
 nd <- data.frame(
   TREE_s = seq(min(master_df$TREE_s), max(master_df$TREE_s), length.out = 50),
   ELEV_s = 0, PFG_s = 0, SLOPE_s = 0, WATER_s = 0, year = 2010, SHRUB_s =0
 )
-nd$offset=0
+# nd$offset=0
 
-p <- predict(fit, newdata = nd, se_fit = TRUE, re_form = NA,offset=nd$offset)
+p <- predict(fit, newdata = nd, se_fit = TRUE, re_form = NA)   # offset=nd$offset
 names(p)
 ggplot(p, aes(TREE_s, est,
               ymin = est - 1.96 * est_se, ymax = est + 1.96 * est_se)) +
@@ -958,9 +898,9 @@ nd <- data.frame(
   SHRUB_s = seq(min(master_df$SHRUB_s), max(master_df$SHRUB_s), length.out = 50),
   ELEV_s = 0, PFG_s = 0, TREE_s = 0, WATER_s = 0, year = 2010, SLOPE_s =0
 )
-nd$offset=0
+# nd$offset=0
 
-p <- predict(fit, newdata = nd, se_fit = TRUE, re_form = NA,offset=nd$offset)
+p <- predict(fit, newdata = nd, se_fit = TRUE, re_form = NA)   # offset=nd$offset
 names(p)
 ggplot(p, aes(SHRUB_s, est,
               ymin = est - 1.96 * est_se, ymax = est + 1.96 * est_se)) +
@@ -968,13 +908,15 @@ ggplot(p, aes(SHRUB_s, est,
 
 fit
 
- ### use 'visreg' package
+### use 'visreg' package
 
+library(visreg)
 visreg(fit,"ELEV_s")    # don't run all- can take a little while..
 visreg(fit,"WATER_s")
 visreg(fit,"SHRUB_s")
 visreg(fit,"TREE_s")
 visreg(fit,"PFG_s")
+
 
 ##  Predict to the entire study area ----------
 
@@ -1019,10 +961,7 @@ p2 = predict(fit,newdata=covars_df3,type="link",offset=rep(0,nrow(covars_df3)) )
 ggplot(p2, aes(x, y, z = est)) + geom_contour_filled() + facet_wrap(~year)
 
 ## TODO: spatial residuals, other checks, etc.
-## TODO: plot_smooth for visualizing smooths. plot random field, linear predictor,
-## TODO: incorporate time-varying effect (maybe WATER_s?)
-## TODO: incorporate delta/hurdle model with different formulas for each component
-## TODO: incorporate spatially varying coefficient?
+# plot_smooth for visualizing smooths. plot random field, linear predictor,
 
 
 peren_water <- st_read("RSF_REAL/Mojave_originalfiles/Perennial_water.shp")
@@ -1046,16 +985,21 @@ ggplot() + geom_contour_filled(data=p3, aes(x, y, z = est)) +
 # library(future)
 # plan(multisession, workers = 2)
 
+## TODO: spatial residuals, other checks, etc.
+## TODO: plot_smooth for visualizing smooths. plot random field, linear predictor,
+## TODO: incorporate time-varying effect (maybe WATER_s?)
+## TODO: incorporate delta/hurdle model with different formulas for each component
+## TODO: incorporate spatially varying coefficient?
 
 ## TODO: plot observed (y) vs cross validation prediction (x) to look for one to one correspondence
 
 fit_cv <- sdmTMB_cv(
-  n_points ~ poly(ELEV_s,2) + WATER_s + SLOPE_s + TREE_s + SHRUB_s + PFG_s ,
+  n_points ~ poly(ELEV_s,2) + SLOPE_s + TREE_s + PFG_s,
   data = master_df,
   mesh = mesh,
   offset = "offset",
-  family = nbinom2(),   
-  time = "year",   # include spatiotemporal and spatial random field
+  family = delta_truncated_nbinom2(),   # hurdle model (like a zero inflation model)
+  spatial = "on",
   k_folds = 4
 )
 closeAllConnections()
@@ -1073,9 +1017,80 @@ sqrt(mean((master_df$n_points - apply(p,1,mean) )^2))    # fitted
 sqrt(mean((fit_cv$data$n_points - fit_cv$data$cv_predicted )^2))    # CV alternative
 
 
+# END SCRIPT ------
 
 
-# END SCRIPT 
+
+
+
+
+# OLD CODE -------
+
+## make raster of survey effort (exposure) -----------
+
+poly_vect = vect(hr_clipped)
+names(poly_vect)
+# poly_vect$ID = as.numeric(as.character(poly_vect$ID))
+
+# Extract: get which cells each polygon intersects
+# this returns a data frame with one row for each grid cell intersected by each hr polygon
+
+extracted <- terra::extract(template_rast, poly_vect, cells = TRUE, ID = TRUE)
+
+# Reverse grouping: for each cell, list all associated polygon IDs
+cells_with_polygons <- extracted %>%
+  group_by(cell) %>%
+  summarise(
+    polygon_ids = list(ID),  # List of all polygon IDs
+    n_polygons = n()          # Count of polygons
+  )
+
+# exposure: sum across individuals overlapping this cell: 
+#  specifically: for each cell, the total weeks of exposure per square km of home range  
+#    takes a minute to run...
+
+#    since we want to run a spatiotemporal model, we adjust effort based on the year. Some cells have more 'exposure' in one year vs another
+
+
+all_idyrs
+idyrlist = lapply(all_idyrs, function(t) subset(dat,IDYEAR==t) )
+names(idyrlist) = all_idyrs
+sapply(idyrlist,nrow)
+all_idyrs = all_idyrs[sapply(idyrlist,nrow)>0]
+idyrlist = idyrlist[all_idyrs]
+days <- sapply(idyrlist,function(t) interval(min(t$DATE),max(t$DATE))/days() )
+names(days) = all_idyrs
+
+ids_byyear = lapply(allyears,function(t){temp = subset(dat,YEAR==t) ; levels(droplevels(temp$ID)) }  )
+names(ids_byyear) = allyears
+ids_byyear$`2009`
+
+master_df$exposure = 0.0    # initialize exposure variables (total exposure and number of ids)
+master_df$nids = 0.0       # not currently used- authors of sdmTMB are working on implementing a 'dispformula' and this would be used for that purpose... 
+r=57
+for(r in 1:nrow(cells_with_polygons)){
+  cl = cells_with_polygons$cell[r]    # cell id
+  pids = cells_with_polygons$polygon_ids[r][[1]]
+  p=1
+  for(p in 1:length(pids)){
+    thispid = pids[p]
+    thisid = as.character(hr_clipped$ID[thispid])  # individual id with range overlap
+    thishr = hr_clipped[thispid,]$geometry
+    thisarea_sqkm = as.numeric(hr_clipped[thispid,]$area)/1000000 
+    y=2
+    for(y in 1:length(allyears)){
+      thisy = as.character(allyears[y])
+      if(thisid %in% ids_byyear[[thisy]]){
+        master_df$nids[thisr] = master_df$nids[thisr] + 1
+        thisidyr = paste0(thisid,"_",thisy)
+        thistime_weeks = as.numeric(days[thisidyr])/7
+        # plot(thishr)
+        thisr = which(master_df$cell==cl & master_df$year == allyears[y])
+        master_df$exposure[thisr] <- master_df$exposure[thisr] + thistime_weeks/thisarea_sqkm
+      }
+    }
+  }
+}    # note: takes a couple minutes to run- I'm pretty sure I could make this more efficient but I don't have the time
 
 
 

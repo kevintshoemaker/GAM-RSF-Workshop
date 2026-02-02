@@ -71,9 +71,7 @@ dat <- st_drop_geometry(simpoints)   # ~200k points
 length(which(!complete.cases(dat)))  # 0 rows with one or more NA
 dat <- na.omit(dat)
 
-
 # process data -----------
-
 
 ## make home ranges ----------
 
@@ -285,61 +283,12 @@ names(covars_df)[1:3]
 master_df <- left_join(master_df,covars_df,by=c("cell","x","y"))
 nrow(master_df)
 
-## make raster of survey effort (exposure) -----------
+## NOTE: removed 'exposure' section here
 
-poly_vect = vect(hr_clipped)
-
-# Extract: get which cells each polygon intersects
-    # this returns a data frame with one row for each grid cell intersected by each hr polygon
-
-extracted <- terra::extract(template_rast, poly_vect, cells = TRUE, ID = TRUE)
-
-# Reverse grouping: for each cell, list all associated polygon IDs
-cells_with_polygons <- extracted %>%
-  group_by(cell) %>%
-  summarise(
-    polygon_ids = list(ID),  # List of all polygon IDs
-    n_polygons = n()          # Count of polygons
-  )
-
-# exposure: sum across individuals overlapping this cell: 
-#  specifically: for each cell, the total weeks of exposure per square km of home range  
-#    takes a minute to run...
-
-all_ids = sort(unique(dat$ID))
-idlist = lapply(all_ids, function(t) subset(dat,ID==t) )
-days <- sapply(idlist,function(t) interval(min(t$timestamp),max(t$timestamp))/days() )
-names(days) = all_ids
-sort(round(days),decreasing = T)   # a few that are only a few days long... let's only keep those with more than 50 days of observations...
-
-
-master_df$exposure = 0.0    # initialize exposure variables (total exposure and number of ids)
-master_df$nids = 0.0       # not currently used- authors of sdmTMB are working on implementing a 'dispformula' and this would be used for that purpose... 
-r=1
-for(r in 1:nrow(cells_with_polygons)){
-  cl = cells_with_polygons$cell[r]
-  pids = cells_with_polygons$polygon_ids[r][[1]]
-  master_df$nids[master_df$cell==cl] = length(pids)
-  p=1
-  for(p in 1:length(pids)){
-    thispid = pids[p]
-    thisid = as.character(hr_clipped$ID[thispid])
-    thishr = hr_clipped[thispid,]$geometry
-    thisarea_sqkm = as.numeric(hr_clipped[thispid,]$area)/1000000 
-    thistime_weeks = as.numeric(days[thisid])/7
-    # plot(thishr)
-    master_df$exposure[master_df$cell==cl] <- master_df$exposure[master_df$cell==cl] + thistime_weeks/thisarea_sqkm
-    
-  }
-}
-
-nrow(master_df)
-ncell(template_rast)
-
-mask = template_rast
-mask[] = NA
-mask[master_df$exposure>0] = 1
-plot(mask)
+mask = template_rast    # make mask layer
+# mask[] = NA
+# mask[master_df$exposure>0] = 1
+# plot(mask)
 
 mask_vector = st_as_sf( as.polygons(mask, dissolve = TRUE, values = 1) )
 plot(st_geometry(mask_vector))
@@ -350,10 +299,10 @@ hist(master_df$n_points)   # lots of zeros- zero inflated model may be appropria
 
 ## save master df version 1 ----------
 
-hist(master_df$exposure)
+# hist(master_df$exposure)
 
-master_df <- subset(master_df, exposure>0.0)   # only keep cells 'exposed' to at least one individual
-master_df$offset = log(master_df$exposure)     # offset terms for count model
+# master_df <- subset(master_df, exposure>0.0)   # only keep cells 'exposed' to at least one individual
+# master_df$offset = log(master_df$exposure)     # offset terms for count model
 
 thisfile = "RSF_SIM/master_count_df_1000m.csv"
 write_csv(master_df,thisfile)
@@ -512,7 +461,8 @@ fm = formula(n_points ~
              + s(TREE_s, bs = "cr",k=5)
              + s(SLOPE_s, bs = "cr",k=5) 
              + s(PFG_s, bs = "cr",k=5)  # + ti(SNOW, WATER, bs = "cr",k=5)  #this interaction is an example
-             + offset(offset)  ) 
+             # + offset(offset)  
+             ) 
 
 #
 
@@ -533,11 +483,12 @@ draw(mod_gam)
 ## model checking --------
 
 gam.check(mod_gam)
+appraise(mod_gam)
 
 library(DHARMa)
 r = DHARMa::simulateResiduals(mod_gam)   # check with DHARMa
 DHARMa::testResiduals(r)   # not perfect
-DHARMa::testZeroInflation(r)  # zero inflated!
+DHARMa::testZeroInflation(r)  # zero inflated?
 
 hist(master_df$n_points)
 
@@ -599,7 +550,7 @@ names(master_df)
 
 mod_spgam = update(mod_gam, .~.+s(x,y,k=100))    # add spatial random field using GAM smoother
 
-gratia::appraise(mod_spgam)   # okay but still evidence for zero inflation
+gratia::appraise(mod_spgam)   
 
 summary(mod_spgam)
 
@@ -639,7 +590,7 @@ moran_plot <- moran.plot(residuals, weights,
 
 ## Calculate correlogram (Moran's I at different lags)
 correlogram <- sp.correlogram(nb, residuals, 
-                              order = 10,          # Number of lags
+                              order = 8,          # Number of lags
                               method = "I",        # Moran's I
                               zero.policy = TRUE)
 
@@ -699,7 +650,7 @@ pred_rast[preddf$cell] = preddf$pred
 
 terra::plot(pred_rast)
 
-my_breaks <- c(-Inf,0.15,0.2, 0.3, 0.5, 0.75, 1, Inf) # 5 bins
+my_breaks <- c(-Inf,1, 5, 10, 15, 20, 25, Inf) # 5 bins
 my_colors_classified <- viridis::viridis(n = 5, option = "D")
 
 r = classify(pred_rast,my_breaks )
@@ -790,14 +741,14 @@ library(sdmTMB)
 master_df$x_s <- master_df$x/1000
 master_df$y_s <- master_df$y/1000
 
-mesh <- make_mesh(master_df, xy_cols = c("x_s", "y_s"), cutoff = 1)
+mesh <- make_mesh(master_df, xy_cols = c("x_s", "y_s"), cutoff = 1.5)
 mesh$mesh$n   # compare mesh nodes to number of observations (nodes should be quite a bit smaller!)
 
 names(master_df)
 library(inlabru)
 ggplot() +
-  inlabru::gg(mesh$mesh) +
-  geom_point(data=master_df, aes(x_s,y_s,col=n_points),size=0.4)
+  inlabru::gg(mesh$mesh) #+
+  # geom_point(data=master_df, aes(x_s,y_s,col=n_points),size=0.4)
 
 
 plot(mesh)  # simple mesh plot
@@ -809,10 +760,10 @@ ggplot() +
 varstouse
 
 fit <- sdmTMB(
-  n_points ~ poly(ELEV_s,2) + SLOPE_s + TREE_s + PFG_s ,
+  n_points ~ s(ELEV_s,k=5) + SLOPE_s + TREE_s + PFG_s ,
   data = master_df,
   mesh = mesh,
-  offset = "offset",
+  # offset = "offset",
   family = delta_truncated_nbinom1(),   # hurdle model (like a zero inflation model)
   spatial = "on"
 )
@@ -882,20 +833,20 @@ moran_plot <- moran.plot(p$resids, weights,
 
 ## Calculate correlogram (Moran's I at different lags)
 correlogram <- sp.correlogram(nb, p$resids, 
-                              order = 10,          # Number of lags
+                              order = 8,          # Number of lags
                               method = "I",        # Moran's I
                               zero.policy = TRUE)
 
 plot(correlogram, main = "Spatial Correlogram")  # ### slightly better, still lots of spatial correlation -------
 
 
-# DHARMa tests 
+# DHARMa tests (many tests still failing- need to look into this!)
 
 s = simulate(fit, nsim = 500, type = "mle-mvn")
 res = dharma_residuals(s, fit, return_DHARMa = T)  # looks good
 
-testResiduals(res)
-testZeroInflation(res)    # dispersion test failed
+testResiduals(res)    # several tests failed
+testZeroInflation(res)    
 testSpatialAutocorrelation(res,master_df$x,master_df$y)
 
 
@@ -910,10 +861,10 @@ nd <- data.frame(
   SLOPE_s = seq(min(master_df$SLOPE_s), max(master_df$SLOPE_s), length.out = 100),
   ELEV_s = 0, PFG_s = 0, TREE_s = 0
 )
-nd$offset=1
+# nd$offset=1
 
 
-p <- predict(fit, newdata = nd, se_fit = TRUE, re_form = NA,offset=nd$offset)
+p <- predict(fit, newdata = nd, se_fit = TRUE, re_form = NA)    # offset=nd$offset
 names(p)
 ggplot(p, aes(SLOPE_s, est,
               ymin = est - 1.96 * est_se, ymax = est + 1.96 * est_se)) +
@@ -921,6 +872,10 @@ ggplot(p, aes(SLOPE_s, est,
 
    # plot the effect of slope on the expected count
 visreg_delta(fit, xvar = "SLOPE_s",scale="response",model=2)
+
+visreg_delta(fit, xvar = "ELEV_s",scale="response",model=2)
+
+# visreg_delta(fit, xvar = "ELEV_s",scale="response",model=1)
 
       # warnings about offset vector can be ignored
 
@@ -953,14 +908,14 @@ fit_cv <- sdmTMB_cv(
   n_points ~ poly(ELEV_s,2) + SLOPE_s + TREE_s + PFG_s,
   data = master_df,
   mesh = mesh,
-  offset = "offset",
+  # offset = "offset",
   family = delta_truncated_nbinom2(),   # hurdle model (like a zero inflation model)
   spatial = "on",
   k_folds = 4
 )
 closeAllConnections()
 
-p = predict(fit,nsim=25,type="response",model=NA,offset=master_df$offset)
+p = predict(fit,nsim=25,type="response",model=NA)   # offset=master_df$offset
 
 # ?sdmTMB::sdmTMB_cv
 
@@ -1110,7 +1065,70 @@ plot(this)
 summary(fit2)
 
 
+# END SCRIPT   --------
 
-# END SCRIPT 
+
+
+
+### OLD CODE BELOW  --------
+
+## make raster of survey effort (exposure) -----------
+
+poly_vect = vect(hr_clipped)
+
+# Extract: get which cells each polygon intersects
+# this returns a data frame with one row for each grid cell intersected by each hr polygon
+
+extracted <- terra::extract(template_rast, poly_vect, cells = TRUE, ID = TRUE)
+
+# Reverse grouping: for each cell, list all associated polygon IDs
+cells_with_polygons <- extracted %>%
+  group_by(cell) %>%
+  summarise(
+    polygon_ids = list(ID),  # List of all polygon IDs
+    n_polygons = n()          # Count of polygons
+  )
+
+# exposure: sum across individuals overlapping this cell: 
+#  specifically: for each cell, the total weeks of exposure per square km of home range  
+#    takes a minute to run...
+
+all_ids = sort(unique(dat$ID))
+idlist = lapply(all_ids, function(t) subset(dat,ID==t) )
+days <- sapply(idlist,function(t) interval(min(t$timestamp),max(t$timestamp))/days() )
+names(days) = all_ids
+sort(round(days),decreasing = T)   # a few that are only a few days long... let's only keep those with more than 50 days of observations...
+
+
+master_df$exposure = 0.0    # initialize exposure variables (total exposure and number of ids)
+master_df$nids = 0.0       # not currently used- authors of sdmTMB are working on implementing a 'dispformula' and this would be used for that purpose... 
+r=1
+for(r in 1:nrow(cells_with_polygons)){
+  cl = cells_with_polygons$cell[r]
+  pids = cells_with_polygons$polygon_ids[r][[1]]
+  master_df$nids[master_df$cell==cl] = length(pids)
+  p=1
+  for(p in 1:length(pids)){
+    thispid = pids[p]
+    thisid = as.character(hr_clipped$ID[thispid])
+    thishr = hr_clipped[thispid,]$geometry
+    thisarea_sqkm = as.numeric(hr_clipped[thispid,]$area)/1000000 
+    thistime_weeks = as.numeric(days[thisid])/7
+    # plot(thishr)
+    master_df$exposure[master_df$cell==cl] <- master_df$exposure[master_df$cell==cl] + thistime_weeks/thisarea_sqkm
+    
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
